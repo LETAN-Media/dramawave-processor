@@ -68,6 +68,17 @@ class Settings(BaseSettings):
     whisper_language: str = 'zh'
     asr_concurrency: int = 1
 
+    # --- ASR provider selection: jianying | whisper | auto (default auto) ---
+    asr_provider: str = 'auto'
+    allow_remote_asr: bool = True
+    jianying_enabled: bool = True
+    jianying_max_retries: int = 2
+    jianying_upload_timeout: int = 120
+    jianying_process_timeout: int = 600
+    jianying_poll_interval: int = 2
+    jianying_concurrency: int = 1
+    jianying_cli: str = 'jianying-subtitle'
+
     # --- Audio extraction ---
     audio_sample_rate: int = 16000
     audio_channels: int = 1
@@ -76,6 +87,14 @@ class Settings(BaseSettings):
     srt_min_duration_ms: int = 300
     srt_max_chars_per_line: int = 24
     srt_max_lines: int = 2
+
+    @field_validator('asr_provider', mode='before')
+    @classmethod
+    def _normalize_asr_provider(cls, v):
+        s = str(v or 'auto').strip().lower()
+        if s not in {'jianying', 'whisper', 'auto'}:
+            return 'auto'
+        return s
 
     @field_validator('subtitle_source_mode', mode='before')
     @classmethod

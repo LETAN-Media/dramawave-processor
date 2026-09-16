@@ -4,8 +4,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl nodejs npm \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g jianying-subtitle \
+    && jianying-subtitle --help >/dev/null 2>&1 || true
 
 WORKDIR /app
 COPY requirements.txt .

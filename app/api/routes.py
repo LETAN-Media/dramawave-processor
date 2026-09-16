@@ -43,7 +43,19 @@ def health() -> HealthOut:
         database=database_ok,
         worker=worker_ok,
         worker_last_seen_at=last_seen,
+        asr=_asr_health(),
     )
+
+
+def _asr_health() -> dict:
+    try:
+        import shutil
+
+        primary = (settings.asr_provider or 'auto').strip().lower()
+        jy = bool(settings.jianying_enabled and shutil.which(settings.jianying_cli))
+        return {'primary': primary, 'fallback': 'whisper', 'jianying_available': jy}
+    except Exception:
+        return {'primary': 'auto', 'fallback': 'whisper', 'jianying_available': False}
 
 
 @router.post('/v1/jobs', response_model=JobAccepted, status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(require_api_key)])

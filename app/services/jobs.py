@@ -9,8 +9,7 @@ from pathlib import Path
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.bilibili.asr import transcribe_audio_to_srt
-from app.bilibili.audio import extract_audio
+from app.bilibili.audio import extract_audio, extract_compressed_audio
 from app.bilibili.downloader import download_video
 from app.bilibili.resolver import resolve_bilibili_url
 from app.bilibili.srt import validate_srt
@@ -284,10 +283,10 @@ def process_job(job_id: str, worker_id: str) -> None:
                 subtitle = _run_bilibili_subtitle_mode(resolved_url, bvid, cid, workdir, job_id)
                 srt_path, srt_lang, srt_cues, srt_source = subtitle.path, subtitle.language, subtitle.cue_count, subtitle.source
             else:
-                # ---- extracting_audio (50) ----
+                # ---- extracting_audio (50): compressed m4a (small upload). ----
+                # WAV is created lazily below only if Whisper fallback needs it.
                 _set_stage(job_id, 'extracting_audio', 50)
                 logger.info('job extracting audio job_id=%s stage=extracting_audio bvid=%s cid=%s', job_id, bvid, cid)
-                audio_path = extract_audio(video_path, workdir, job_id=job_id, bvid=bvid, cid=cid)
 
                 if mode == 'auto':
                     # Try Bilibili first, fall back to ASR on NO_SUBTITLE.
@@ -302,15 +301,53 @@ def process_job(job_id: str, worker_id: str) -> None:
                         logger.info('job subtitle auto: bilibili miss, fallback ASR job_id=%s', job_id)
 
                 if srt_path is None:
-                    # ---- transcribing_chinese (55-90) ----
+                    # ---- transcribing_chinese (55-90) via ASR provider service ----
+                    from app.asr.service import transcribe_with_fallback
+
                     _set_stage(job_id, 'transcribing_chinese', 55)
-                    logger.info('job transcribing job_id=%s stage=transcribing_chinese bvid=%s cid=%s', job_id, bvid, cid)
-                    out_path, lang, cues, detected = transcribe_audio_to_srt(audio_path, workdir, job_id=job_id, bvid=bvid, cid=cid)
+                    asr_start = utcnow()
+                    with SessionLocal.begin() as db:
+                        job = db.get(Job, job_id)
+                        job.asr_started_at = asr_start
+                    logger.info('job transcribing job_id=%s stage=transcribing_chinese bvid=%s cid=%s provider=%s', job_id, bvid, cid, settings.asr_provider)
+                    # Compressed m4a for JianYing (fast upload); WAV only if Whisper needs it.
+                    compressed = extract_compressed_audio(video_path, workdir, job_id=job_id, bvid=bvid, cid=cid)
+                    wav_path: Path | None = None
+                    need_wav = (settings.asr_provider or 'auto').strip().lower() in {'whisper'} or not (
+                        settings.allow_remote_asr and settings.jianying_enabled
+                    )
+                    if need_wav:
+                        wav_path = extract_audio(video_path, workdir, job_id=job_id, bvid=bvid, cid=cid)
+                    try:
+                        out_path, lang, cues, provider, fallback_used, asr_secs, up_secs, rec_secs = transcribe_with_fallback(
+                            compressed, wav_path, workdir, job_id=job_id,
+                        )
+                    except Exception:
+                        # Lazy WAV fallback: JianYing failed and whisper needs WAV.
+                        if wav_path is None:
+                            wav_path = extract_audio(video_path, workdir, job_id=job_id, bvid=bvid, cid=cid)
+                            out_path, lang, cues, provider, fallback_used, asr_secs, up_secs, rec_secs = transcribe_with_fallback(
+                                compressed, wav_path, workdir, job_id=job_id,
+                            )
+                        else:
+                            raise
+                    # If whisper fallback produced WAV needlessly, keep files until cleanup.
                     srt_path, srt_lang, srt_cues, srt_source = out_path, lang, cues, 'ASR'
+                    asr_done = utcnow()
                     with SessionLocal.begin() as db:
                         job = db.get(Job, job_id)
                         job.progress = 90
-                    logger.info('job transcribed job_id=%s detected=%s cues=%s', job_id, detected, cues)
+                        job.asr_provider = provider
+                        job.asr_completed_at = asr_done
+                        job.asr_processing_seconds = float(asr_secs)
+                        job.asr_fallback_used = bool(fallback_used)
+                    logger.info(
+                        'job transcribed job_id=%s provider=%s fallback=%s cues=%s asr_seconds=%.1f upload=%.1f recog=%.1f audio_size=%s',
+                        job_id, provider, fallback_used, cues, asr_secs,
+                        up_secs if up_secs is not None else -1,
+                        rec_secs if rec_secs is not None else -1,
+                        compressed.stat().st_size if compressed.exists() else -1,
+                    )
 
             if srt_path is None:
                 raise RuntimeError('subtitle generation produced no file')
@@ -338,12 +375,18 @@ def process_job(job_id: str, worker_id: str) -> None:
                 job_id, bvid, cid, srt_source, srt_lang, srt_cues,
             )
 
-            # ---- cleanup: keep original.mp4 + source.zh.srt, remove audio.wav ----
+            # ---- cleanup: keep original.mp4 + source.zh.srt; remove intermediates ----
             try:
-                wav = workdir / 'audio.wav'
-                if wav.exists():
-                    wav.unlink()
-                    logger.info('job cleanup audio removed job_id=%s', job_id)
+                for name in ('audio.wav', 'audio.m4a'):
+                    p = workdir / name
+                    if p.exists():
+                        p.unlink()
+                        logger.info('job cleanup audio removed job_id=%s file=%s', job_id, name)
+                for tmp in workdir.glob('jianying.*.json'):
+                    try:
+                        tmp.unlink()
+                    except OSError:
+                        pass
             except OSError as exc:
                 logger.warning('job cleanup audio failed job_id=%s error=%s', job_id, exc)
 

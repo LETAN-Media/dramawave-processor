@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Float, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -37,6 +37,12 @@ class Job(Base):
     subtitle_language: Mapped[str | None] = mapped_column(String(32))
     subtitle_cue_count: Mapped[int | None] = mapped_column(Integer)
     subtitle_source: Mapped[str | None] = mapped_column(String(40))
+
+    asr_provider: Mapped[str | None] = mapped_column(String(32))
+    asr_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    asr_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    asr_processing_seconds: Mapped[float | None] = mapped_column(Float)
+    asr_fallback_used: Mapped[bool | None] = mapped_column(Boolean)
 
     lease_owner: Mapped[str | None] = mapped_column(String(128), index=True)
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)

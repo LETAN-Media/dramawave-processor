@@ -17,3 +17,17 @@ def init_db() -> None:
     from app import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    # Lightweight additive migration for existing deployments (no data loss).
+    if not settings.database_url.startswith('sqlite'):
+        from sqlalchemy import text
+
+        stmts = [
+            'ALTER TABLE jobs ADD COLUMN IF NOT EXISTS asr_provider VARCHAR(32)',
+            'ALTER TABLE jobs ADD COLUMN IF NOT EXISTS asr_started_at TIMESTAMPTZ',
+            'ALTER TABLE jobs ADD COLUMN IF NOT EXISTS asr_completed_at TIMESTAMPTZ',
+            'ALTER TABLE jobs ADD COLUMN IF NOT EXISTS asr_processing_seconds DOUBLE PRECISION',
+            'ALTER TABLE jobs ADD COLUMN IF NOT EXISTS asr_fallback_used BOOLEAN',
+        ]
+        with engine.begin() as conn:
+            for stmt in stmts:
+                conn.execute(text(stmt))

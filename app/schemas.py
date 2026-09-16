@@ -29,6 +29,11 @@ class JobOut(BaseModel):
     subtitle_language: str | None = None
     subtitle_cue_count: int | None = None
     subtitle_source: str | None = None
+    asr_provider: str | None = None
+    asr_started_at: datetime | None = None
+    asr_completed_at: datetime | None = None
+    asr_processing_seconds: float | None = None
+    asr_fallback_used: bool | None = None
     created_at: datetime
     updated_at: datetime
     started_at: datetime | None = None
@@ -46,3 +51,4 @@ class HealthOut(BaseModel):
     database: bool
     worker: bool
     worker_last_seen_at: datetime | None = None
+    asr: dict | None = None
