@@ -1,0 +1,113 @@
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
+
+    app_name: str = 'bilibili-processor'
+    environment: str = 'development'
+    api_key: str | None = None
+
+    database_url: str = 'sqlite:///./bilibili_processor.db'
+
+    worker_id: str = 'worker-1'
+    worker_poll_seconds: int = 3
+    worker_heartbeat_seconds: int = 20
+    job_lease_seconds: int = 180
+    stale_job_max_age_hours: int = 24
+
+    work_dir: Path = Path('/tmp/bilibili-processor')
+    storage_provider: str = 'local'
+    local_storage_dir: Path = Path('/var/lib/bilibili-processor/storage')
+    persist_original_video: bool = True
+
+    s3_endpoint_url: str | None = None
+    s3_region: str = 'auto'
+    s3_bucket: str | None = None
+    s3_access_key_id: str | None = None
+    s3_secret_access_key: str | None = None
+    s3_public_base_url: str | None = None
+
+    bilibili_cookies_file: Path | None = None
+    bilibili_user_agent: str = (
+        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) '
+        'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 '
+        'Mobile/15E148 Safari/604.1'
+    )
+    # Desktop UA for yt-dlp: iPhone UA forces m.bilibili generic extractor
+    # and breaks downloads. API calls keep the iPhone UA above.
+    bilibili_ytdlp_user_agent: str = (
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/126.0.0.0 Safari/537.36'
+    )
+    download_format: str = 'bv*[height<=1080]+ba/b[height<=1080]/b'
+    download_format_fallback: str = 'bv*[vcodec^=avc1][height<=480]+ba/b[height<=480]/b'
+    max_download_height: int = 1080
+    download_concurrent_fragments: int = 4
+    http_timeout_seconds: int = 20
+
+    subtitle_preferred_languages: list[str] = Field(
+        default_factory=lambda: ['zh-CN', 'zh-Hans', 'zh-Hant', 'zh', 'ai-zh']
+    )
+    # asr | bilibili | auto (default asr: always use video audio)
+    subtitle_source_mode: str = 'asr'
+
+    # --- Chinese ASR (faster-whisper, CPU-only default) ---
+    whisper_model: str = 'small'
+    whisper_device: str = 'cpu'
+    whisper_compute_type: str = 'int8'
+    whisper_cpu_threads: int = 4
+    omp_num_threads: int = 4
+    whisper_vad_filter: bool = True
+    whisper_word_timestamps: bool = True
+    whisper_language: str = 'zh'
+    asr_concurrency: int = 1
+
+    # --- Audio extraction ---
+    audio_sample_rate: int = 16000
+    audio_channels: int = 1
+
+    # --- Strict SRT rules ---
+    srt_min_duration_ms: int = 300
+    srt_max_chars_per_line: int = 24
+    srt_max_lines: int = 2
+
+    @field_validator('subtitle_source_mode', mode='before')
+    @classmethod
+    def _normalize_subtitle_mode(cls, v):
+        s = str(v or 'asr').strip().lower()
+        if s not in {'asr', 'bilibili', 'auto'}:
+            return 'asr'
+        return s
+
+    @field_validator('bilibili_cookies_file', mode='before')
+    @classmethod
+    def _normalize_cookies_file(cls, v):
+        # Unset / None -> NO COOKIE
+        if v is None:
+            return None
+        # Already a Path (e.g. default): defensive normalize.
+        if isinstance(v, Path):
+            s = str(v).strip()
+            if not s or s == '.':
+                return None
+            return Path(s)
+        # Strings from env / .env: strip whitespace.
+        # "", "   " -> None (NO COOKIE). Never Path("") / Path(".").
+        s = str(v).strip()
+        if not s:
+            return None
+        return Path(s)
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+settings = get_settings()
