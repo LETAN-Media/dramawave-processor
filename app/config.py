@@ -83,6 +83,31 @@ class Settings(BaseSettings):
     audio_sample_rate: int = 16000
     audio_channels: int = 1
 
+    # --- Translation (OpenAI-compatible; default ToolNet) ---
+    translation_provider: str = 'toolnet'
+    translation_base_url: str = 'https://api.toolnet.tech/v1'
+    translation_api_key: str | None = None
+    translation_model: str = 'alims-intl.llm'
+    translation_fallback_model: str = 'groq/qwen/qwen3.8-27b'
+    translation_batch_size: int = 50
+    translation_concurrency: int = 3
+    translation_timeout: int = 120
+    translation_max_retries: int = 3
+    translation_context_cues: int = 5
+    translation_glossary: str = ''
+
+    # --- Vietnamese TTS (Edge default; architecture open) ---
+    tts_provider: str = 'edge'
+    tts_voice: str = 'vi-VN-HoaiMyNeural'
+    tts_rate: str = '+0%'
+    tts_volume: str = '+0%'
+    tts_concurrency: int = 6
+    tts_timeout: int = 120
+    tts_max_retries: int = 3
+    tts_max_tempo: float = 1.25
+    tts_sample_rate: int = 44100
+    vi_chars_per_sec: float = 9.0
+
     # --- Strict SRT rules ---
     srt_min_duration_ms: int = 300
     srt_max_chars_per_line: int = 24

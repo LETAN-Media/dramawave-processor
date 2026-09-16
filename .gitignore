@@ -7,7 +7,12 @@ __pycache__/
 /tmp/
 tmp/
 storage/
+generated/
 secrets/
+secrets*
+*.mp3
+*.wav
+*.mp4
 .DS_Store
 cookies*
 cookies.txt

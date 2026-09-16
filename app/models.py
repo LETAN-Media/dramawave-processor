@@ -44,6 +44,34 @@ class Job(Base):
     asr_processing_seconds: Mapped[float | None] = mapped_column(Float)
     asr_fallback_used: Mapped[bool | None] = mapped_column(Boolean)
 
+    # --- Phase 2: VI translation + synchronized TTS ---
+    vi_local_path: Mapped[str | None] = mapped_column(Text)
+    vi_storage_key: Mapped[str | None] = mapped_column(Text)
+    vi_cue_count: Mapped[int | None] = mapped_column(Integer)
+    translation_provider: Mapped[str | None] = mapped_column(String(64))
+    translation_model: Mapped[str | None] = mapped_column(String(128))
+    translation_batches: Mapped[int | None] = mapped_column(Integer)
+    translation_seconds: Mapped[float | None] = mapped_column(Float)
+    translation_primary_model: Mapped[str | None] = mapped_column(String(128))
+    translation_fallback_model: Mapped[str | None] = mapped_column(String(128))
+    translation_primary_batches: Mapped[int | None] = mapped_column(Integer)
+    translation_fallback_batches: Mapped[int | None] = mapped_column(Integer)
+    translation_failed_batches: Mapped[int | None] = mapped_column(Integer)
+    translation_retries: Mapped[int | None] = mapped_column(Integer)
+    translation_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    translation_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    tts_provider: Mapped[str | None] = mapped_column(String(32))
+    tts_voice: Mapped[str | None] = mapped_column(String(128))
+    tts_clip_count: Mapped[int | None] = mapped_column(Integer)
+    tts_seconds: Mapped[float | None] = mapped_column(Float)
+    tts_timing_warnings: Mapped[int | None] = mapped_column(Integer)
+    voice_local_path: Mapped[str | None] = mapped_column(Text)
+    voice_storage_key: Mapped[str | None] = mapped_column(Text)
+    voice_duration_seconds: Mapped[float | None] = mapped_column(Float)
+    phase2_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    phase2_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    phase2_seconds: Mapped[float | None] = mapped_column(Float)
+
     lease_owner: Mapped[str | None] = mapped_column(String(128), index=True)
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
@@ -51,6 +79,29 @@ class Job(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CueState(Base):
+    """Per-cue Phase 2 checkpoint: translation + TTS state for resume."""
+
+    __tablename__ = 'cue_states'
+
+    job_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    cue_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    start_ms: Mapped[int | None] = mapped_column(Integer)
+    end_ms: Mapped[int | None] = mapped_column(Integer)
+    zh_text: Mapped[str | None] = mapped_column(Text)
+    vi_text: Mapped[str | None] = mapped_column(Text)
+    translated: Mapped[bool | None] = mapped_column(Boolean)
+    estimated_speech_ms: Mapped[int | None] = mapped_column(Integer)
+    cps: Mapped[float | None] = mapped_column(Float)
+    tts_status: Mapped[str | None] = mapped_column(String(32))
+    tts_path: Mapped[str | None] = mapped_column(Text)
+    tts_duration_ms: Mapped[int | None] = mapped_column(Integer)
+    tempo: Mapped[float | None] = mapped_column(Float)
+    timing_warning: Mapped[bool | None] = mapped_column(Boolean)
+    error: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class WorkerHeartbeat(Base):

@@ -6,8 +6,8 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db import SessionLocal
-from app.models import Job, WorkerHeartbeat
-from app.schemas import HealthOut, JobAccepted, JobCreate, JobOut
+from app.models import CueState, Job, WorkerHeartbeat
+from app.schemas import HealthOut, JobAccepted, JobCreate, JobOut, ViPatch
 from app.security import require_api_key
 from app.services.jobs import create_job
 from app.storage.factory import get_storage
@@ -53,9 +53,35 @@ def _asr_health() -> dict:
 
         primary = (settings.asr_provider or 'auto').strip().lower()
         jy = bool(settings.jianying_enabled and shutil.which(settings.jianying_cli))
-        return {'primary': primary, 'fallback': 'whisper', 'jianying_available': jy}
+        out: dict = {'primary': primary, 'fallback': 'whisper', 'jianying_available': jy}
     except Exception:
-        return {'primary': 'auto', 'fallback': 'whisper', 'jianying_available': False}
+        out = {'primary': 'auto', 'fallback': 'whisper', 'jianying_available': False}
+    try:
+        out['translation'] = {
+            'provider': settings.translation_provider,
+            'primary_model': settings.translation_model,
+            'fallback_model': settings.translation_fallback_model,
+            'configured': bool(settings.translation_api_key),
+        }
+    except Exception:
+        out['translation'] = {'provider': 'toolnet', 'configured': False}
+    try:
+        from app.tts.providers_edge import resolve_voice_name
+
+        try:
+            import edge_tts  # noqa: F401
+
+            tts_available = True
+        except ImportError:
+            tts_available = False
+        out['tts'] = {
+            'provider': settings.tts_provider,
+            'voice': resolve_voice_name(),
+            'available': tts_available,
+        }
+    except Exception:
+        out['tts'] = {'provider': 'edge', 'available': False}
+    return out
 
 
 @router.post('/v1/jobs', response_model=JobAccepted, status_code=status.HTTP_202_ACCEPTED, dependencies=[Depends(require_api_key)])
@@ -107,6 +133,77 @@ def get_subtitle(job_id: str) -> Response:
     raise HTTPException(status_code=404, detail='Subtitle not ready')
 
 
+@router.post('/v1/jobs/{job_id}/phase2', response_model=JobAccepted, dependencies=[Depends(require_api_key)])
+def start_phase2(job_id: str) -> JobAccepted:
+    """Queue Phase 2 (VI translation + synchronized TTS). Returns immediately; worker does the work."""
+    with SessionLocal.begin() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail='Job not found')
+        if job.status not in {'ready', 'ready_for_render', 'failed'}:
+            raise HTTPException(status_code=409, detail=f'Phase 2 requires a ready job (status={job.status})')
+        has_zh = bool(job.subtitle_storage_key) or bool(
+            job.local_subtitle_path and Path(job.local_subtitle_path).exists())
+        if not has_zh:
+            raise HTTPException(status_code=409, detail='Phase 1 Chinese subtitles not ready')
+        job.status = 'translating'
+        job.current_stage = 'translating'
+        job.progress = 0
+        job.error = None
+        job.lease_owner = None
+        job.lease_until = None
+        return JobAccepted(job_id=job.id, status=job.status)
+
+
+def _subtitle_bytes(job: Job, kind: str) -> bytes:
+    if kind == 'zh':
+        key, local = job.subtitle_storage_key, job.local_subtitle_path
+    else:
+        key, local = job.vi_storage_key, job.vi_local_path
+    if key:
+        try:
+            return get_storage().get_bytes(key)
+        except Exception:
+            pass
+    if local and Path(local).exists():
+        return Path(local).read_bytes()
+    raise HTTPException(status_code=404, detail=f'Subtitle {kind} not ready')
+
+
+@router.get('/v1/jobs/{job_id}/subtitles/zh', dependencies=[Depends(require_api_key)])
+def get_subtitle_zh(job_id: str) -> Response:
+    with SessionLocal() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail='Job not found')
+        data = _subtitle_bytes(job, 'zh')
+    return Response(content=data, media_type='application/x-subrip; charset=utf-8')
+
+
+@router.get('/v1/jobs/{job_id}/subtitles/vi', dependencies=[Depends(require_api_key)])
+def get_subtitle_vi(job_id: str) -> Response:
+    with SessionLocal() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail='Job not found')
+        data = _subtitle_bytes(job, 'vi')
+    return Response(content=data, media_type='application/x-subrip; charset=utf-8')
+
+
+@router.patch('/v1/jobs/{job_id}/subtitles/vi', dependencies=[Depends(require_api_key)])
+def patch_subtitle_vi(job_id: str, payload: ViPatch) -> dict:
+    """Edit VI cues; only affected TTS clips regenerate (job requeues to syncing_voice)."""
+    with SessionLocal() as db:
+        if db.get(Job, job_id) is None:
+            raise HTTPException(status_code=404, detail='Job not found')
+    try:
+        from app.services.phase2 import apply_vi_edits
+
+        return apply_vi_edits(job_id, [{'id': c.id, 'text': c.text} for c in payload.cues])
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post('/v1/jobs/{job_id}/retry', response_model=JobAccepted, dependencies=[Depends(require_api_key)])
 def retry_job(job_id: str) -> JobAccepted:
     with SessionLocal.begin() as db:
@@ -116,7 +213,29 @@ def retry_job(job_id: str) -> JobAccepted:
         if job.status not in {'failed'}:
             raise HTTPException(status_code=409, detail='Only failed jobs can be retried')
         # No duplicate row: reuse same job id, clear error/lease/ownership.
-        if job.subtitle_storage_key or job.subtitle_source in {'ASR', 'BILIBILI_API', 'BILIBILI', 'NONE'}:
+        has_voice = bool(job.voice_storage_key) or bool(
+            job.voice_local_path and Path(job.voice_local_path).exists())
+        has_vi = bool(job.vi_storage_key) or bool(
+            job.vi_local_path and Path(job.vi_local_path).exists())
+        has_zh = bool(job.subtitle_storage_key) or bool(
+            job.local_subtitle_path and Path(job.local_subtitle_path).exists())
+        phase2_started = bool(
+            job.translation_started_at or job.vi_storage_key or job.vi_local_path
+            or job.voice_storage_key or job.voice_local_path)
+        if has_voice:
+            job.status = 'ready_for_render'
+            job.current_stage = 'ready_for_render'
+            job.progress = 100
+        elif has_vi:
+            job.status = 'generating_tts'
+            job.current_stage = 'generating_tts'
+            job.progress = 40
+        elif has_zh and phase2_started:
+            # Phase 2 was interrupted before VI subtitles existed: resume it.
+            job.status = 'translating'
+            job.current_stage = 'translating'
+            job.progress = 0
+        elif job.subtitle_source in {'ASR', 'BILIBILI_API', 'BILIBILI', 'NONE'}:
             # If subtitle file actually exists keep ready, else re-queue subtitle stage.
             has_srt = bool(job.subtitle_storage_key) or bool(
                 job.local_subtitle_path and Path(job.local_subtitle_path).exists()

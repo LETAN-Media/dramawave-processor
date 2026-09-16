@@ -34,6 +34,26 @@ class JobOut(BaseModel):
     asr_completed_at: datetime | None = None
     asr_processing_seconds: float | None = None
     asr_fallback_used: bool | None = None
+    vi_storage_key: str | None = None
+    vi_cue_count: int | None = None
+    translation_provider: str | None = None
+    translation_model: str | None = None
+    translation_batches: int | None = None
+    translation_seconds: float | None = None
+    translation_primary_model: str | None = None
+    translation_fallback_model: str | None = None
+    translation_primary_batches: int | None = None
+    translation_fallback_batches: int | None = None
+    translation_failed_batches: int | None = None
+    translation_retries: int | None = None
+    tts_provider: str | None = None
+    tts_voice: str | None = None
+    tts_clip_count: int | None = None
+    tts_seconds: float | None = None
+    tts_timing_warnings: int | None = None
+    voice_storage_key: str | None = None
+    voice_duration_seconds: float | None = None
+    phase2_seconds: float | None = None
     created_at: datetime
     updated_at: datetime
     started_at: datetime | None = None
@@ -43,6 +63,15 @@ class JobOut(BaseModel):
 class JobAccepted(BaseModel):
     job_id: str
     status: str
+
+
+class ViCueEdit(BaseModel):
+    id: int
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class ViPatch(BaseModel):
+    cues: list[ViCueEdit] = Field(min_length=1, max_length=500)
 
 
 class HealthOut(BaseModel):

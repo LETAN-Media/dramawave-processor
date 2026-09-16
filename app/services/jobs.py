@@ -31,6 +31,12 @@ ACTIVE_STATES = (
     'transcribing_chinese',
     'validating_srt',
     'extracting_subtitles',
+    # Phase 2: translation + synchronized TTS.
+    'translating',
+    'validating_translation',
+    'generating_tts',
+    'syncing_voice',
+    'validating_voice',
 )
 
 
@@ -180,6 +186,13 @@ def process_job(job_id: str, worker_id: str) -> None:
                 current_stage = job.current_stage
 
             logger.info('job start job_id=%s stage=%s worker=%s mode=%s', job_id, current_stage, worker_id, settings.subtitle_source_mode)
+
+            # ---- Phase 2 dispatch (translation + TTS) ----
+            if current_stage in {'translating', 'validating_translation', 'generating_tts', 'syncing_voice', 'validating_voice'}:
+                from app.services.phase2 import process_phase2
+
+                process_phase2(job_id, worker_id)
+                return
 
             # ---- resolving (progress 10) ----
             if current_stage in {'queued', 'resolving'}:
