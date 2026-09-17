@@ -37,6 +37,8 @@ ACTIVE_STATES = (
     'generating_tts',
     'syncing_voice',
     'validating_voice',
+    # Final voice QA.
+    'voice_qa',
 )
 
 
@@ -192,6 +194,13 @@ def process_job(job_id: str, worker_id: str) -> None:
                 from app.services.phase2 import process_phase2
 
                 process_phase2(job_id, worker_id)
+                return
+
+            # ---- Final voice QA dispatch ----
+            if current_stage in {'voice_qa'}:
+                from app.services.voice_qa import run_voice_qa
+
+                run_voice_qa(job_id, worker_id)
                 return
 
             # ---- resolving (progress 10) ----

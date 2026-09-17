@@ -108,10 +108,14 @@ class Settings(BaseSettings):
     tts_sample_rate: int = 44100
     vi_chars_per_sec: float = 9.0
 
-    # --- Strict SRT rules ---
+    # --- Strict SRT + QA rules (single source of truth) ---
     srt_min_duration_ms: int = 300
     srt_max_chars_per_line: int = 24
     srt_max_lines: int = 2
+    cps_target: float = 20.0
+    qa_max_rounds: int = 2
+    qa_severe_overflow_ms: int = 250
+    qa_severe_overflow_ratio: float = 0.10
 
     @field_validator('asr_provider', mode='before')
     @classmethod

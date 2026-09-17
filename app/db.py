@@ -64,3 +64,9 @@ def init_db() -> None:
             # Widen tts_status for values like 'needs_regeneration'.
             conn.execute(text(
                 "ALTER TABLE cue_states ALTER COLUMN tts_status TYPE VARCHAR(32)"))
+            conn.execute(text(
+                'ALTER TABLE cue_states ADD COLUMN IF NOT EXISTS qa_class VARCHAR(16)'))
+            conn.execute(text(
+                'ALTER TABLE cue_states ADD COLUMN IF NOT EXISTS final_tts_ms INTEGER'))
+            conn.execute(text(
+                'ALTER TABLE cue_states ADD COLUMN IF NOT EXISTS manual_review_required BOOLEAN'))

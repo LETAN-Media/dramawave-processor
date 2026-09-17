@@ -204,6 +204,28 @@ def patch_subtitle_vi(job_id: str, payload: ViPatch) -> dict:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
+@router.post('/v1/jobs/{job_id}/voice-qa', response_model=JobAccepted, dependencies=[Depends(require_api_key)])
+def start_voice_qa(job_id: str) -> JobAccepted:
+    """Queue FINAL VOICE QA (classify fit, compress OVERFLOW, regen TTS, reassemble). Fast return."""
+    with SessionLocal.begin() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail='Job not found')
+        if job.status not in {'ready_for_render', 'ready', 'failed'}:
+            raise HTTPException(status_code=409, detail=f'Voice QA requires a rendered job (status={job.status})')
+        has_vi = bool(job.vi_storage_key) or bool(
+            job.vi_local_path and Path(job.vi_local_path).exists())
+        if not has_vi:
+            raise HTTPException(status_code=409, detail='Vietnamese subtitles not ready')
+        job.status = 'voice_qa'
+        job.current_stage = 'voice_qa'
+        job.progress = 0
+        job.error = None
+        job.lease_owner = None
+        job.lease_until = None
+        return JobAccepted(job_id=job.id, status=job.status)
+
+
 @router.post('/v1/jobs/{job_id}/retry', response_model=JobAccepted, dependencies=[Depends(require_api_key)])
 def retry_job(job_id: str) -> JobAccepted:
     with SessionLocal.begin() as db:

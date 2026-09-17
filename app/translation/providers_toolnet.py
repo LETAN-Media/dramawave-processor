@@ -19,7 +19,7 @@ from app.translation.base import TransContext, TransCue, TranslationProvider
 
 logger = logging.getLogger('translation-toolnet')
 
-SYSTEM_PROMPT = (
+SYSTEM_PROMPT_TEMPLATE = (
     'Bạn là một biên dịch viên chuyên nghiệp chuyên dịch phụ đề phim và drama Trung Quốc sang tiếng Việt.\n'
     'Nhiệm vụ của bạn là dịch nội dung từng cue từ tiếng Trung sang tiếng Việt tự nhiên, hiện đại và phù hợp ngữ cảnh phim.\n'
     'QUY TẮC BẮT BUỘC:\n'
@@ -34,7 +34,7 @@ SYSTEM_PROMPT = (
     '8. Giữ xưng hô nhất quán xuyên suốt phim dựa trên previous_context, character_glossary, relationship_glossary.\n'
     '9. Tên riêng: khi chắc chắn tên Trung Quốc thì dùng cách đọc Hán-Việt phù hợp (ví dụ: 北京 → Bắc Kinh). '
     'Không tự bịa tên nếu không chắc chắn. Giữ cách gọi tên nhất quán xuyên suốt phim.\n'
-    '10. duration_ms là thời lượng hiển thị. Bản dịch cần đủ ngắn để đọc và nói kịp (mục tiêu CPS <= 22).\n'
+    '10. duration_ms là thời lượng hiển thị. Bản dịch cần đủ ngắn để đọc và nói kịp (mục tiêu CPS <= __CPS__).\n'
     '11. Nếu câu quá dài: rút gọn cách diễn đạt nhưng giữ nguyên ý, tiếp tục tối ưu cho tự nhiên và ngắn hơn. '
     'Không được chia cue, đổi ID, đổi timing.\n'
     '12. Subtitle tối đa 2 dòng, mục tiêu mỗi dòng <= 40 ký tự. Nếu cần xuống dòng dùng \\n trong text_vi.\n'
@@ -45,8 +45,97 @@ SYSTEM_PROMPT = (
 )
 
 
+def system_prompt() -> str:
+    """Official translation prompt with live CPS target (single source of truth)."""
+    try:
+        target = settings.cps_target
+        cps = int(target) if float(target).is_integer() else target
+    except (TypeError, ValueError):
+        cps = 20
+    return SYSTEM_PROMPT_TEMPLATE.replace('__CPS__', str(cps))
+
+
 def _post_chat_stream(messages: list[dict], model: str, timeout: int, max_tokens: int) -> str:
-    """POST chat/completions with stream:true, accumulate SSE deltas."""
+    """POST chat/completions with stream:true, accumulate SSE deltas.
+
+    Uses curl --max-time (total wall-clock cap, trickle-proof). urllib's
+    per-recv timeout resets on any byte, which lets a degraded gateway hang
+    workers forever; --max-time cannot be reset by trickles.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    if not settings.translation_api_key:
+        raise RuntimeError('TRANSLATION_API_KEY is not configured')
+    body = {
+        'model': model,
+        'stream': True,
+        'messages': messages,
+        'temperature': 0.2,
+        'max_tokens': max_tokens,
+    }
+    total_timeout = max(10, int(timeout))
+    if shutil.which('curl') is None:
+        return _post_chat_stream_urllib(messages, model, total_timeout, max_tokens)
+    url = settings.translation_base_url.rstrip('/') + '/chat/completions'
+    chunks: list[str] = []
+    try:
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=True) as bf, \
+                tempfile.NamedTemporaryFile('w', suffix='.curlcfg', delete=True) as cf:
+            import os
+
+            json.dump(body, bf)
+            bf.flush()
+            # Key via config file (0600) so it never appears in process listings.
+            os.chmod(cf.name, 0o600)
+            cf.write('header = "Content-Type: application/json"\n')
+            cf.write('header = "Authorization: Bearer ' + settings.translation_api_key.replace('"', '') + '"\n')
+            cf.flush()
+            proc = subprocess.run(
+                ['curl', '-sS', '-N', '--fail-with-body', '--max-time', str(total_timeout),
+                 '-X', 'POST', url, '-K', cf.name,
+                 '--data-binary', '@' + bf.name],
+                capture_output=True, text=True, timeout=total_timeout + 15,
+            )
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(f'stream deadline {total_timeout}s exceeded') from exc
+    except FileNotFoundError as exc:
+        raise RuntimeError(f'TRANSLATION_HTTP: curl missing: {exc}') from exc
+    output = proc.stdout or ''
+    if proc.returncode != 0:
+        # HTTP 4xx/5xx (quota/429/unavailable) land here via --fail-with-body.
+        detail = ((proc.stdout or '') + ' ' + (proc.stderr or '')).strip()[-500:]
+        raise RuntimeError(f'TRANSLATION_HTTP: curl exit {proc.returncode}: {detail}')
+    for ln in output.splitlines():
+        ln = ln.strip()
+        if not ln.startswith('data:'):
+            continue
+        data = ln[5:].strip()
+        if data == '[DONE]':
+            break
+        try:
+            evt = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        try:
+            delta = evt['choices'][0]['delta'].get('content') or ''
+        except (KeyError, IndexError, TypeError):
+            try:
+                delta = evt['choices'][0]['message'].get('content') or ''
+            except (KeyError, IndexError, TypeError, AttributeError):
+                delta = ''
+        if delta:
+            chunks.append(delta)
+    content = ''.join(chunks)
+    content = '\n'.join(ln for ln in content.splitlines() if not ln.strip().startswith('data:'))
+    if not content.strip():
+        raise RuntimeError('TRANSLATION_EMPTY_RESPONSE')
+    return content
+
+
+def _post_chat_stream_urllib(messages: list[dict], model: str, timeout: int, max_tokens: int) -> str:
+    """Fallback transport when curl is unavailable (per-recv timeout semantics)."""
     if not settings.translation_api_key:
         raise RuntimeError('TRANSLATION_API_KEY is not configured')
     body = {
@@ -194,7 +283,7 @@ class OpenAICompatibleProvider(TranslationProvider):
         if not cues:
             return {}, self.primary_model
         messages = [
-            {'role': 'system', 'content': SYSTEM_PROMPT},
+            {'role': 'system', 'content': system_prompt()},
             {'role': 'user', 'content': _user_payload(cues, context)},
         ]
         max_tokens = max(1000, 80 * len(cues))
@@ -215,16 +304,76 @@ class OpenAICompatibleProvider(TranslationProvider):
                     time.sleep(min(2 * (attempt + 1), 8))
         raise RuntimeError(f'TRANSLATION_FAILED: {last_err}')
 
+    def compress_batch(self, items: list[tuple[int, str, int]], max_attempts: int = 2) -> tuple[dict[int, str], str]:
+        """Compress up to ~10 cues in one model call. Returns ({cue_id: shorter}, model_used)."""
+        lines = []
+        for cid, text, dur in items:
+            budget = max(8, int(dur / 1000 * self._cps_num()))
+            lines.append({'id': cid, 'text_vi': text, 'duration_ms': dur, 'max_chars': budget})
+        messages = [
+            {'role': 'system', 'content': system_prompt()},
+            {'role': 'user', 'content': json.dumps({
+                'task': 'compress_batch',
+                'instruction': (
+                    'Rewrite EACH Vietnamese subtitle below more concisely while preserving the core meaning, '
+                    'character names, pronouns and context. Respect each cue\'s max_chars HARD LIMIT '
+                    f'(derived from duration and CPS <= {self._cps()}). Shorter is better. '
+                    'Summarize aggressively when needed, but never invent content. '
+                    'Return JSON only: [{"id": ..., "text_vi": "..."}, ...] with exactly one entry per input cue.'
+                ),
+                'cues': lines,
+            }, ensure_ascii=False)},
+        ]
+        last_err: Exception | None = None
+        for model in self.models:
+            for _ in range(max(1, max_attempts)):
+                try:
+                    t0 = time.monotonic()
+                    raw = _post_chat_stream(messages, model, settings.translation_timeout, 2000)
+                    mapping = _extract_mapping(raw, [cid for cid, _, _ in items])
+                    logger.info('compress batch ok model=%s cues=%s elapsed=%.1fs', model, len(items), time.monotonic() - t0)
+                    return mapping, model
+                except Exception as exc:  # noqa: BLE001
+                    last_err = exc
+                    with self._retry_lock:
+                        self.retry_count += 1
+                    logger.warning('compress batch failed model=%s error=%s', model, str(exc)[:200])
+                    time.sleep(2)
+        raise RuntimeError(f'COMPRESS_BATCH_FAILED: {last_err}')
+
+    @staticmethod
+    def _cps() -> str:
+        try:
+            target = settings.cps_target
+            return str(int(target) if float(target).is_integer() else target)
+        except (TypeError, ValueError):
+            return '20'
+
+    @staticmethod
+    def _cps_num() -> float:
+        try:
+            return max(1.0, float(settings.cps_target))
+        except (TypeError, ValueError):
+            return 20.0
+
     def compress_text(self, cue_id: int, text_vi: str, duration_ms: int, max_attempts: int = 2) -> str:
         """Rewrite one Vietnamese cue more concisely (CPS). Same model chain."""
+        try:
+            cps = settings.cps_target
+        except (TypeError, ValueError):
+            cps = 20
+        budget = max(8, int(duration_ms / 1000 * self._cps_num()))
         messages = [
-            {'role': 'system', 'content': SYSTEM_PROMPT},
+            {'role': 'system', 'content': system_prompt()},
             {'role': 'user', 'content': json.dumps({
                 'task': 'compress',
                 'instruction': (
-                    'Rewrite this Vietnamese subtitle more concisely while preserving the exact meaning. '
-                    f'Target spoken/display duration: {duration_ms} ms. Maximum target CPS: 22. '
-                    'Keep it natural. Return JSON only: {"id": %d, "text_vi": "..."}' % cue_id
+                    'Rewrite this Vietnamese subtitle more concisely while preserving the core meaning, '
+                    'character names, pronouns and context. '
+                    f'Target spoken/display duration: {duration_ms} ms. Maximum target CPS: {cps}. '
+                    f'HARD LIMIT: at most {budget} characters including spaces; shorter is better. '
+                    'Summarize aggressively if needed, never invent content. '
+                    'Keep it natural. Do not change the ID. Return JSON only: {"id": %d, "text_vi": "..."}' % cue_id
                 ),
                 'id': cue_id,
                 'text_vi': text_vi,

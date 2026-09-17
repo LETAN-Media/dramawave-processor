@@ -154,11 +154,13 @@ def _save_translations(job_id: str, mapping: dict[int, str]) -> None:
 
 
 def _compress_long_cues(cues: list[dict], mapping: dict[int, str], *, job_id: str | None = None,
-                        cps_limit: float = 22.0, max_rounds: int = 2) -> dict[int, str]:
+                        cps_limit: float | None = None, max_rounds: int = 2) -> dict[int, str]:
     """Auto-compress cues with CPS > limit via the model (same chain). Timing untouched."""
     from app.translation.providers_toolnet import OpenAICompatibleProvider
     from app.translation.service import compute_cps
 
+    if cps_limit is None:
+        cps_limit = settings.cps_target
     by_id = {c['id']: c for c in cues}
     provider = OpenAICompatibleProvider()
     compressed = 0
