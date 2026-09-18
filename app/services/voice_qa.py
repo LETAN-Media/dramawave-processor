@@ -236,7 +236,9 @@ def _current_text(job_id: str, cue_id: int) -> str:
 
 
 def run_voice_qa(job_id: str, worker_id: str) -> dict:
-    from app.services.jobs import lease_renewer
+    from app.services.worker_util import lease_renewer as _lease_renewer, renew_job_lease, update_heartbeat
+    def lease_renewer(job_id, worker_id):
+        return _lease_renewer(job_id, worker_id, lambda: (renew_job_lease(job_id, worker_id, ('voice_qa',)), update_heartbeat(worker_id, 'busy', job_id)))
 
     storage = get_storage()
     workdir = settings.work_dir / job_id
@@ -310,7 +312,7 @@ def run_voice_qa(job_id: str, worker_id: str) -> dict:
                 job.progress = 70
 
             # Reassemble voice timeline + validate duration.
-            from app.bilibili.audio import ffprobe_duration
+            from app.media.audio import ffprobe_duration
             from app.tts.service import clip_wav
             from app.tts.voice import assemble_voice
 

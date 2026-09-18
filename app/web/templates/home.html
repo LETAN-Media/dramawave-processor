@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% set active = "home" %}
+{% block title %}DramaWave Studio{% endblock %}
+{% block content %}
+<section class="search">
+  <form id="search-form" autocomplete="off">
+    <input id="search-q" name="q" type="search" placeholder="Tìm phim..." aria-label="Tìm phim" minlength="1" maxlength="200">
+    <button type="submit">Tìm</button>
+  </form>
+  <p id="search-hint" class="hint">Ví dụ: Alpha, CEO, revenge, divorce. API miễn phí có thể mất 30–60s lần đầu.</p>
+  <div id="search-state" class="state" hidden></div>
+  <div id="search-grid" class="grid"></div>
+</section>
+<section class="catalog">
+  <h2>Đã xử lý gần đây</h2>
+  {% if catalog %}
+  <div class="grid">
+    {% for s in catalog %}
+    <a class="card" href="/series/{{ s.provider_series_id }}">
+      {% if s.cover_url %}<img src="{{ s.cover_url }}" alt="" loading="lazy">{% else %}<div class="noposter">DW</div>{% endif %}
+      <div class="card-body">
+        <div class="card-title">{{ s.title }}</div>
+        <div class="card-sub">{{ s.unlocked }}/{{ s.total }} tập free</div>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="hint">Chưa có phim nào. Hãy tìm phim bên trên.</p>
+  {% endif %}
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+document.getElementById('search-form').addEventListener('submit', StudioSearch.submit);
+</script>
+{% endblock %}

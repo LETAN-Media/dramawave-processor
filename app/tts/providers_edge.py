@@ -45,13 +45,13 @@ class EdgeTTSProvider(TTSProvider):
     def resolve_voice(self) -> str:
         return resolve_voice_name()
 
-    def synthesize(self, cue_id: int, text: str, out_mp3: Path) -> TTSClip:
+    def synthesize(self, cue_id: int, text: str, out_mp3: Path, voice: str | None = None) -> TTSClip:
         import edge_tts
 
         text = (text or '').strip()
         if not text:
             raise RuntimeError(f'TTS_EMPTY_TEXT: cue {cue_id}')
-        voice = resolve_voice_name()
+        voice = (voice or '').strip() or resolve_voice_name()
         out_mp3.parent.mkdir(parents=True, exist_ok=True)
 
         async def _run() -> None:

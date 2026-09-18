@@ -9,7 +9,7 @@ from pathlib import Path
 from app.asr.base import ASRResult
 from app.asr.jianying import JianYingProvider
 from app.asr.whisper import WhisperProvider
-from app.bilibili.srt import normalize_segments_to_srt, write_srt
+from app.media.srt import normalize_segments_to_srt, write_srt
 from app.config import settings
 
 logger = logging.getLogger('asr-service')
@@ -24,9 +24,23 @@ def _write_strict_srt(workdir: Path, result: ASRResult) -> tuple[Path, int]:
     )
     if not srt.strip():
         raise RuntimeError('INVALID_SRT_FORMAT: empty after normalization')
-    out = workdir / 'source.zh.srt'
+    out = workdir / 'source.original.srt'
     cues = write_srt(out, srt)
     return out, cues
+
+
+def _normalize_language(value: str | None) -> str:
+    """Map API/whisper language tags to short codes; '' means detect."""
+    v = (value or '').strip().lower()
+    if not v or v == 'auto':
+        return ''
+    if v.startswith('zh') or 'chinese' in v or 'cmn' in v:
+        return 'zh'
+    for code in ('en', 'ko', 'ja', 'es', 'fr', 'de', 'it', 'pt', 'ru', 'ar',
+                 'hi', 'th', 'vi', 'id', 'ms', 'tr', 'nl', 'pl', 'uk'):
+        if v == code or v.startswith(code + '-') or v.startswith(code + '_'):
+            return code
+    return ''
 
 
 def transcribe_with_fallback(
@@ -35,8 +49,13 @@ def transcribe_with_fallback(
     workdir: Path,
     *,
     job_id: str | None = None,
+    language: str | None = None,
 ) -> tuple[Path, str, int, str, bool, float, float | None, float | None]:
     """Run ASR per ASR_PROVIDER (jianying|whisper|auto) with fallback.
+
+    Routing: zh -> JianYing primary, Whisper fallback. non-zh/unknown ->
+    Whisper primary (forced language or auto-detect). JianYing is never fed
+    non-Chinese audio.
 
     Returns (srt_path, language, cues, provider_used, fallback_used,
              asr_seconds, upload_seconds, recognition_seconds).
@@ -44,8 +63,11 @@ def transcribe_with_fallback(
     mode = (settings.asr_provider or 'auto').strip().lower()
     if mode not in {'jianying', 'whisper', 'auto'}:
         mode = 'auto'
+    lang = _normalize_language(language or settings.source_language)
+    if not lang:
+        lang = _normalize_language(settings.whisper_language) or 'zh'
     workdir.mkdir(parents=True, exist_ok=True)
-    use_remote = bool(settings.allow_remote_asr and settings.jianying_enabled)
+    use_remote = bool(settings.allow_remote_asr and settings.jianying_enabled) and lang == 'zh'
 
     def _run_jianying() -> tuple[Path, int, float, float | None, float | None]:
         if compressed_audio is None or not compressed_audio.exists():
@@ -56,29 +78,29 @@ def transcribe_with_fallback(
         total = time.monotonic() - t0
         return out, cues, total, result.upload_seconds, result.recognition_seconds
 
-    def _run_whisper() -> tuple[Path, int, float, float | None, float | None]:
+    def _run_whisper(force_lang: str | None = None) -> tuple[Path, int, str, float, float | None, float | None]:
         audio = wav_audio if (wav_audio and wav_audio.exists()) else compressed_audio
         if audio is None or not audio.exists():
             raise RuntimeError('WHISPER_NO_AUDIO: no audio available')
         t0 = time.monotonic()
-        result = WhisperProvider().transcribe(audio, job_id=job_id)
+        result = WhisperProvider().transcribe(audio, job_id=job_id, language=force_lang or lang)
         out, cues = _write_strict_srt(workdir, result)
         total = time.monotonic() - t0
-        return out, cues, total, result.upload_seconds, result.recognition_seconds
+        return out, cues, result.language or lang, total, result.upload_seconds, result.recognition_seconds
 
     if mode == 'jianying':
         if not use_remote:
-            logger.info('jianying requested but remote disabled, using whisper job_id=%s', job_id)
-            out, cues, total, up, rec = _run_whisper()
-            return out, 'zh', cues, 'whisper', True, total, up, rec
+            logger.info('jianying requested but unusable (remote off or lang=%s), using whisper job_id=%s', lang, job_id)
+            out, cues, detected, total, up, rec = _run_whisper()
+            return out, detected, cues, 'whisper', True, total, up, rec
         out, cues, total, up, rec = _run_jianying()
         return out, 'zh', cues, 'jianying', False, total, up, rec
 
     if mode == 'whisper':
-        out, cues, total, up, rec = _run_whisper()
-        return out, 'zh', cues, 'whisper', False, total, up, rec
+        out, cues, detected, total, up, rec = _run_whisper()
+        return out, detected, cues, 'whisper', False, total, up, rec
 
-    # auto: try JianYing, fallback Whisper.
+    # auto: zh -> JianYing then Whisper fallback; others -> Whisper directly.
     if use_remote:
         try:
             out, cues, total, up, rec = _run_jianying()
@@ -86,7 +108,7 @@ def transcribe_with_fallback(
         except Exception as exc:
             logger.warning('JianYing ASR failed, falling back to faster-whisper job_id=%s error=%s', job_id, str(exc)[:800])
     else:
-        logger.info('remote ASR disabled, using local whisper job_id=%s', job_id)
-    out, cues, total, up, rec = _run_whisper()
+        logger.info('remote ASR unusable (lang=%s), using local whisper job_id=%s', lang, job_id)
+    out, cues, detected, total, up, rec = _run_whisper()
     fallback = use_remote  # True when jianying was tried first
-    return out, 'zh', cues, 'whisper', fallback, total, up, rec
+    return out, detected, cues, 'whisper', fallback, total, up, rec

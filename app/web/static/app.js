@@ -1,16 +1,54 @@
 /* DramaWave Studio: fetch-based UI, no build step. */
 'use strict';
 
+var API_TIMEOUT_MS = 90000;
+
 async function api(path, opts) {
-  const res = await fetch(path, Object.assign({ headers: { Accept: 'application/json' } }, opts || {}));
+  opts = opts || {};
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), API_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch(path, Object.assign(
+      { headers: { Accept: 'application/json' }, credentials: 'same-origin', signal: ctrl.signal },
+      opts));
+  } catch (e) {
+    throw new Error(e && e.name === 'AbortError'
+      ? 'Hết thời gian chờ (90s). Có thể DramaWave API đang khởi động, hãy Thử lại.'
+      : 'Không kết nối được máy chủ: ' + (e && e.message ? e.message : 'network error'));
+  } finally {
+    clearTimeout(timer);
+  }
   if (res.status === 401) { location.href = '/login?next=' + encodeURIComponent(location.pathname); throw new Error('login'); }
-  const data = await res.json().catch(() => ({}));
+  let data = {};
+  try { data = await res.json(); } catch (e) { data = {}; }
   if (!res.ok) {
     const d = data && data.detail;
-    throw new Error(typeof d === 'string' ? d : (d && d.message) || ('HTTP ' + res.status));
+    const msg = typeof d === 'string' ? d : (d && d.message) || ('HTTP ' + res.status);
+    if (res.status === 502 || /cold start|waking up|timeout/i.test(msg)) {
+      throw new Error('DramaWave API đang khởi động, hãy đợi ~30s rồi Thử lại.');
+    }
+    if (res.status === 404) throw new Error('Không tìm thấy dữ liệu (404).');
+    if (res.status >= 500) throw new Error('Lỗi máy chủ (' + res.status + '). Hãy Thử lại.');
+    throw new Error(msg);
   }
   return data;
 }
+
+function apiErrorBox(box, message, retryFn) {
+  box.innerHTML = '';
+  const msg = document.createElement('p');
+  msg.textContent = message;
+  const retry = document.createElement('button');
+  retry.type = 'button';
+  retry.textContent = 'Thử lại';
+  retry.addEventListener('click', retryFn);
+  box.append(msg, retry);
+}
+
+window.addEventListener('unhandledrejection', function (ev) {
+  try { console.error('[Studio] unhandled rejection:', ev && ev.reason); } catch (e) { /* ignore */ }
+});
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -101,20 +139,63 @@ const StudioSeries = {
       this.renderList();
       void firstLocked;
     } catch (e) {
-      st.textContent = 'Lỗi: ' + e.message;
+      st.innerHTML = '';
+      const msg = document.createElement('p');
+      msg.textContent = 'Không tải được thông tin phim: ' + e.message;
+      const retry = document.createElement('button');
+      retry.type = 'button';
+      retry.textContent = 'Thử lại';
+      retry.addEventListener('click', () => this.load());
+      st.append(msg, retry);
+      console.error('[StudioSeries] load failed:', e);
     }
   },
   renderList() {
-    const box = document.getElementById('ep-list');
-    box.innerHTML = this.episodes.map((e) =>
-      '<label class="ep' + (e.locked ? ' locked' : '') + '">' +
-      '<input type="checkbox" data-n="' + e.number + '"' + (e.locked ? ' disabled' : ' checked') + '>' +
-      '<span class="t">Tập ' + e.number +
-      (e.has_final ? ' ✓' : '') +
-      (e.youtube === 'published' ? ' ✅ Published' : e.youtube === 'uploading' ? ' 🔄 Uploading' : e.youtube === 'failed' ? ' ⚠ YT Failed' : '') + '</span>' +
-      '<span class="d">' + esc(fmtDur(e.duration)) + '</span>' +
-      '<span class="badge ' + (e.locked ? 'locked' : 'free') + '">' + (e.locked ? 'LOCKED' : 'FREE') + '</span>' +
-      '</label>').join('');
+    const box = document.getElementById('episodes');
+    if (!this.episodes.length) {
+      box.innerHTML = '<p class="hint">Chưa có tập nào được crawl.</p>';
+      return;
+    }
+    box.innerHTML = this.episodes.map((e) => {
+      let badge = '';
+      let sourcesHtml = '';
+      if (e.sources && e.sources.length > 0) {
+        let bestFree = null;
+        for (const s of e.sources) {
+            sourcesHtml += `<div class="hint">${s.provider}: ${s.locked ? 'LOCKED' : 'FREE'}</div>`;
+            if (!s.locked && (!bestFree || s.provider === 'reelshort' || s.provider === 'dramabox')) {
+                bestFree = s;
+            }
+        }
+        if (bestFree) {
+            badge = `<span class="badge free">FREE &middot; ${bestFree.provider}</span>`;
+        } else {
+            badge = '<span class="badge locked">LOCKED</span>';
+        }
+      } else {
+          badge = e.locked ? '<span class="badge locked">LOCKED</span>' : '<span class="badge free">FREE</span>';
+      }
+      return `
+      <label class="ep-item ${e.locked ? 'locked' : ''}">
+        <input type="checkbox" value="${e.number}" ${e.locked ? 'disabled' : ''}>
+        <div class="ep-info">
+          <strong>Tập ${e.number}</strong>
+          ${badge}
+          <div class="ep-status ${e.yt_status || e.status}">${this.formatStatus(e.status, e.progress, e.yt_status)}</div>
+        </div>
+        ${sourcesHtml ? `<div class="ep-sources" style="font-size: 0.8em; margin-top: 4px; display: none;">${sourcesHtml}</div>` : ''}
+      </label>`
+    }).join('');
+    
+    // Add click event for expanding sources
+    box.querySelectorAll('.ep-item').forEach(item => {
+      item.addEventListener('click', (ev) => {
+        if(ev.target.tagName !== 'INPUT') {
+          const sources = item.querySelector('.ep-sources');
+          if(sources) sources.style.display = sources.style.display === 'none' ? 'block' : 'none';
+        }
+      });
+    });
   },
   checked() {
     return Array.from(document.querySelectorAll('#ep-list input:checked')).map((c) => +c.dataset.n).sort((a, b) => a - b);
@@ -199,7 +280,12 @@ const StudioJobs = {
           '<div class="progress"><div style="width:' + j.progress + '%"></div></div>' +
           (j.error_code ? '<p class="error">' + esc(j.error_code) + '</p>' : '') + '</a>';
       }).join('');
-    } catch (e) { if (!quiet) st.textContent = 'Lỗi: ' + e.message; }
+    } catch (e) {
+      if (!quiet) {
+        st.hidden = false;
+        apiErrorBox(st, 'Không tải được dữ liệu: ' + e.message, () => this.load());
+      }
+    }
   },
 };
 
@@ -247,7 +333,11 @@ const StudioJob = {
            j.status === 'published' || j.status === 'youtube_upload_failed') && !ytActive) {
         clearInterval(this.timer);
       }
-    } catch (e) { st.textContent = 'Lỗi: ' + e.message; clearInterval(this.timer); }
+    } catch (e) {
+      clearInterval(this.timer);
+      st.hidden = false;
+      apiErrorBox(st, 'Không tải được dữ liệu: ' + e.message, () => this.load());
+    }
   },
   async renderYouTube() {
     const box = document.getElementById('job-youtube');
@@ -349,7 +439,7 @@ const StudioSettings = {
       });
       await this.loadYouTube();
       const rows = [
-        ['DramaWave API', d.dramawave_api.online ? 'Online' + (d.dramawave_api.latency_ms != null ? ' · ' + d.dramawave_api.latency_ms + 'ms' : '') : 'Offline' + (d.dramawave_api.error ? ' · ' + d.dramawave_api.error : '')],
+        ['DramaWave API', d.drama_source_api.online ? 'Online' + (d.drama_source_api.latency_ms != null ? ' · ' + d.drama_source_api.latency_ms + 'ms' : '') : 'Offline' + (d.drama_source_api.error ? ' · ' + d.drama_source_api.error : '')],
         ['Processor', d.processor.online ? 'Online' : 'Offline'],
         ['ASR', 'JianYing ' + (d.asr.jianying_available ? '✓' : '✗') + ' · Whisper ' + (d.asr.whisper_available ? '✓' : '✗')],
         ['TTS', esc(d.tts.provider) + ' · ' + esc(d.tts.voice) + (d.tts.available ? ' ✓' : ' ✗')],
@@ -358,7 +448,10 @@ const StudioSettings = {
       ];
       document.getElementById('provider-status').innerHTML =
         rows.map((r) => '<dt>' + esc(r[0]) + '</dt><dd>' + r[1] + '</dd>').join('');
-    } catch (e) { st.textContent = 'Lỗi: ' + e.message; }
+    } catch (e) {
+      st.hidden = false;
+      apiErrorBox(st, 'Không tải được dữ liệu: ' + e.message, () => this.init());
+    }
   },
   async loadYouTube() {
     const st = document.getElementById('yt-state');

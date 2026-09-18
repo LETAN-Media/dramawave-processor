@@ -65,8 +65,8 @@ class Settings(BaseSettings):
     translation_provider: str = 'toolnet'
     translation_base_url: str = 'https://api.toolnet.tech/v1'
     translation_api_key: str | None = None
-    translation_model: str = 'alims-intl.llm'
-    translation_fallback_model: str = 'groq/qwen/qwen3.8-27b'
+    translation_model: str = 'groq/qwen/qwen3.8-27b'
+    translation_fallback_model: str = 'alims-intl.llm'
     translation_batch_size: int = 50
     translation_concurrency: int = 3
     translation_timeout: int = 120
@@ -115,10 +115,10 @@ class Settings(BaseSettings):
 
     # --- DramaWave resolver API (Render; the ONLY DramaWave source) ---
     dramawave_enabled: bool = True
-    dramawave_api_base_url: str = 'https://dramawave-api.onrender.com'
-    dramawave_api_token: str | None = None
-    dramawave_api_timeout: int = 90
-    dramawave_api_max_retries: int = 3
+    drama_source_api_base_url: str = 'https://dramawave-api.onrender.com'
+    drama_source_api_token: str | None = None
+    drama_source_api_timeout: int = 90
+    drama_source_api_max_retries: int = 3
 
     # --- Episode processing ---
     video_quality: str = '1080p'

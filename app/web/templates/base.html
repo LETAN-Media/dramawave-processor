@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0b12">
+<title>{% block title %}DramaWave Studio{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">DramaWave Studio</a>
+  <nav class="topnav">
+    <a href="/" class="{% if active=='home' %}on{% endif %}">Home</a>
+    <a href="/jobs" class="{% if active=='jobs' %}on{% endif %}">Jobs</a>
+    <a href="/settings" class="{% if active=='settings' %}on{% endif %}">Settings</a>
+  </nav>
+  {% if auth_enabled %}
+  <form class="logout" method="post" action="/logout">
+    <button type="submit" title="{{ user }}">{{ user }} · Thoát</button>
+  </form>
+  {% endif %}
+</header>
+<main class="wrap">
+{% block content %}{% endblock %}
+</main>
+<nav class="bottomnav" aria-label="Điều hướng">
+  <a href="/" class="{% if active=='home' %}on{% endif %}"><span>⌂</span>Home</a>
+  <a href="/jobs" class="{% if active=='jobs' %}on{% endif %}"><span>▤</span>Jobs</a>
+  <a href="/settings" class="{% if active=='settings' %}on{% endif %}"><span>⚙</span>Settings</a>
+</nav>
+<script src="/static/app.js?v={{ static_version }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

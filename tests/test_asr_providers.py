@@ -3,7 +3,7 @@
 import pytest
 
 from app.asr.base import ASRResult, ASRSegment, ASRWord
-from app.bilibili.srt import validate_srt_text
+from app.media.srt import validate_srt_text
 
 
 def _segs():
@@ -62,7 +62,7 @@ def test_asr_falls_back_to_whisper(tmp_path, monkeypatch):
         calls.append('jy')
         raise RuntimeError('JIANYING_CLI_FAILED: 503')
 
-    def ok_wh(self, audio_path, *, job_id=None):
+    def ok_wh(self, audio_path, *, job_id=None, language=None):
         calls.append('wh')
         return ASRResult(provider='whisper', language='zh', segments=_segs(), recognition_seconds=9.0)
 
@@ -91,7 +91,7 @@ def test_jianying_timeout_triggers_fallback(tmp_path, monkeypatch):
     def timeout_jy(self, audio_path, *, job_id=None):
         raise RuntimeError('JIANYING_TIMEOUT after 720s')
 
-    def ok_wh(self, audio_path, *, job_id=None):
+    def ok_wh(self, audio_path, *, job_id=None, language=None):
         return ASRResult(provider='whisper', language='zh', segments=_segs(), recognition_seconds=1.0)
 
     monkeypatch.setattr('app.asr.service.JianYingProvider.transcribe', timeout_jy)
@@ -102,7 +102,7 @@ def test_jianying_timeout_triggers_fallback(tmp_path, monkeypatch):
 
 def test_jianying_result_normalizes_to_strict_srt(tmp_path):
     from app.asr.jianying import _parse_jianying_json
-    from app.bilibili.srt import normalize_segments_to_srt
+    from app.media.srt import normalize_segments_to_srt
 
     payload = [
         {'text': '那年父母离世公司濒临破产我在姐姐最难的时候和他断绝关系今天我们要说的是这个很长的故事还要继续补充更多文字内容', 'startMs': 200, 'endMs': 10000,
@@ -151,7 +151,7 @@ def test_remote_asr_disabled_uses_local_whisper(tmp_path, monkeypatch):
         calls.append('jy')
         raise AssertionError('jianying must not run when ALLOW_REMOTE_ASR=false')
 
-    def ok_wh(self, audio_path, *, job_id=None):
+    def ok_wh(self, audio_path, *, job_id=None, language=None):
         calls.append('wh')
         return ASRResult(provider='whisper', language='zh', segments=_segs(), recognition_seconds=1.0)
 
@@ -177,7 +177,7 @@ def test_invalid_jianying_srt_rejected_or_normalized(tmp_path):
                    encoding='utf-8')
     segs = parse_jianying_srt_file(raw)
     assert len(segs) == 2
-    from app.bilibili.srt import normalize_segments_to_srt
+    from app.media.srt import normalize_segments_to_srt
     srt = normalize_segments_to_srt([{'start': s.start_ms / 1000, 'end': s.end_ms / 1000, 'text': s.text} for s in segs])
     assert '00:00:00,200 --> 00:00:01,666' in srt
     assert validate_srt_text(srt) == 2

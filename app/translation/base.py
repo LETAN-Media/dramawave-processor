@@ -18,6 +18,8 @@ class TransCue:
 class TransContext:
     previous: list[tuple['TransCue', str]]  # [(cue, translated_vi)] tail for coherence
     glossary: dict[str, dict[str, str]]  # characters/relationships/pronouns sections
+    style: str = 'AUTO'  # MODERN_DRAMA | XIANXIA | NINETIES | AUTO
+    source_language: str = 'zh'  # short code of the source audio
 
 
 class TranslationProvider(ABC):

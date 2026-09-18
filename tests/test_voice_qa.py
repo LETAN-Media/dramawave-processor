@@ -180,4 +180,4 @@ def test_compress_batch_mapping(monkeypatch):
     p = OpenAICompatibleProvider()
     out, used = p.compress_batch([(1, 'Dài một.', 1000), (2, 'Dài hai.', 1200)])
     assert out == {1: 'Ngắn 1.', 2: 'Ngắn 2.'}
-    assert used == 'alims-intl.llm'
+    assert used == p.models[0]

@@ -356,7 +356,7 @@ def test_vi_srt_strict_format(tmp_path):
     data = vi.encode('utf-8')
     assert not data.startswith(b'\xef\xbb\xbf')
     assert b'\r' not in data
-    from app.bilibili.srt import validate_srt_text
+    from app.media.srt import validate_srt_text
     assert validate_srt_text(vi) == 3
     assert 'lúc chị khó khăn nhất.' in vi
 

@@ -10,7 +10,7 @@ import logging
 import time
 from pathlib import Path
 
-from app.bilibili.srt import validate_srt
+from app.media.srt import validate_srt
 from app.config import settings
 from app.db import SessionLocal
 from app.models import CueState, Job
@@ -232,7 +232,7 @@ def _video_duration(job_id: str, workdir: Path) -> float:
         local_video = Path(job.local_video_path) if job.local_video_path else None
         declared = job.duration_seconds
     if local_video and local_video.exists():
-        from app.bilibili.audio import ffprobe_duration
+        from app.media.audio import ffprobe_duration
 
         dur = ffprobe_duration(local_video)
         if dur and dur > 0:
@@ -243,7 +243,11 @@ def _video_duration(job_id: str, workdir: Path) -> float:
 
 
 def process_phase2(job_id: str, worker_id: str) -> None:
-    from app.services.jobs import lease_renewer
+    from app.services.worker_util import lease_renewer as _lease_renewer, renew_job_lease, update_heartbeat
+    _PHASE2_ACTIVE = ('queued', 'extracting_subtitles', 'translating', 'validating_translation',
+                      'generating_tts', 'syncing_voice', 'validating_voice')
+    def lease_renewer(job_id, worker_id):
+        return _lease_renewer(job_id, worker_id, lambda: (renew_job_lease(job_id, worker_id, _PHASE2_ACTIVE), update_heartbeat(worker_id, 'busy', job_id)))
 
     storage = get_storage()
     workdir = settings.work_dir / job_id
@@ -406,7 +410,7 @@ def process_phase2(job_id: str, worker_id: str) -> None:
 
             # ---- validating_voice (95-100) ----
             _set_stage(job_id, 'validating_voice', 96)
-            from app.bilibili.audio import ffprobe_duration
+            from app.media.audio import ffprobe_duration
 
             check = ffprobe_duration(voice_path)
             if check is None or abs(check - video_dur) >= 0.5:
@@ -502,6 +506,6 @@ def apply_vi_edits(job_id: str, edits: list[dict]) -> dict:
 
 
 def validate_srt_text_lenient(text: str) -> int:
-    from app.bilibili.srt import validate_srt_text
+    from app.media.srt import validate_srt_text
 
     return validate_srt_text(text)

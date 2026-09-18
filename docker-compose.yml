@@ -25,8 +25,8 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - work_cache:/tmp/bilibili-processor
-      - storage_data:/var/lib/bilibili-processor/storage
+      - work_cache:/tmp/dramawave-processor
+      - storage_data:/var/lib/dramawave-processor/storage
 
   worker:
     build: .
@@ -37,10 +37,15 @@ services:
       postgres:
         condition: service_healthy
     volumes:
-      - work_cache:/tmp/bilibili-processor
-      - storage_data:/var/lib/bilibili-processor/storage
+      - work_cache:/tmp/dramawave-processor
+      - storage_data:/var/lib/dramawave-processor/storage
 
 volumes:
+  # External: preserve pre-rename data (DB history + stored media).
   postgres_data:
-  work_cache:
+    external: true
+    name: bilibili-processor_postgres_data
   storage_data:
+    external: true
+    name: bilibili-processor_storage_data
+  work_cache:

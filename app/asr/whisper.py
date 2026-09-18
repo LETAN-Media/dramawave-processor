@@ -28,7 +28,14 @@ def _get_sem() -> threading.Semaphore:
 class WhisperProvider(ASRProvider):
     name = 'whisper'
 
-    def transcribe(self, audio_path: Path, *, job_id: str | None = None) -> ASRResult:
+    # faster-whisper language codes; None = auto-detect.
+    SUPPORTED_LANGUAGES = frozenset({
+        'zh', 'en', 'ko', 'ja', 'es', 'fr', 'de', 'it', 'pt', 'ru', 'ar',
+        'hi', 'th', 'vi', 'id', 'ms', 'tr', 'nl', 'pl', 'uk',
+    })
+
+    def transcribe(self, audio_path: Path, *, job_id: str | None = None,
+                   language: str | None = None) -> ASRResult:
         from faster_whisper import WhisperModel
 
         if not audio_path.exists() or audio_path.stat().st_size <= 0:
@@ -40,10 +47,14 @@ class WhisperProvider(ASRProvider):
             pass
         sem = _get_sem()
         model_name = settings.whisper_model
+        requested = (language or settings.whisper_language or 'zh').strip().lower()
+        forced: str | None = requested if requested in self.SUPPORTED_LANGUAGES else None
+        if requested not in ('auto', '') and forced is None:
+            logger.warning('whisper unsupported language %s, auto-detecting job_id=%s', requested, job_id)
         logger.info(
-            'whisper start job_id=%s model=%s device=%s compute=%s audio_size=%s',
+            'whisper start job_id=%s model=%s device=%s compute=%s lang=%s audio_size=%s',
             job_id, model_name, settings.whisper_device, settings.whisper_compute_type,
-            audio_path.stat().st_size,
+            forced or 'auto', audio_path.stat().st_size,
         )
         start = time.monotonic()
         if not sem.acquire(blocking=True, timeout=3600 * 6):
@@ -59,12 +70,13 @@ class WhisperProvider(ASRProvider):
             # caller may pass a WAV specifically. Accept either.
             segments_iter, info = model.transcribe(
                 str(audio_path),
-                language=settings.whisper_language or 'zh',
+                language=forced,
                 task='transcribe',
                 vad_filter=bool(settings.whisper_vad_filter),
                 word_timestamps=bool(settings.whisper_word_timestamps),
             )
-            detected = getattr(info, 'language', 'zh') or 'zh'
+            detected = (getattr(info, 'language', None) or forced or 'zh').strip().lower()
+            logger.info('whisper detected language=%s job_id=%s', detected, job_id)
             segments: list[ASRSegment] = []
             for seg in segments_iter:
                 words: list[ASRWord] = []
@@ -93,6 +105,6 @@ class WhisperProvider(ASRProvider):
         elapsed = time.monotonic() - start
         logger.info('whisper done job_id=%s cues=%s elapsed=%.1fs', job_id, len(segments), elapsed)
         return ASRResult(
-            provider='whisper', language='zh', segments=segments,
+            provider='whisper', language=detected, segments=segments,
             recognition_seconds=elapsed,
         )

@@ -9,7 +9,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from app.bilibili.srt import TIMECODE_RE, format_timestamp, parse_timestamp, validate_srt_text
+from app.media.srt import TIMECODE_RE, format_timestamp, parse_timestamp, validate_srt_text
 from app.config import settings
 from app.translation.base import TransContext, TransCue
 
@@ -106,6 +106,8 @@ def translate_cues(
     job_id: str | None = None,
     provider=None,
     on_chunk=None,
+    style: str = 'AUTO',
+    source_language: str = 'zh',
 ) -> tuple[dict[int, str], dict]:
     """Translate all cues with batching + resume.
 
@@ -168,7 +170,8 @@ def translate_cues(
             vi = mapping.get(i, '')
             if src is not None and vi:
                 prev.append((TransCue(cue_id=i, start_ms=src['start_ms'], end_ms=src['end_ms'], text=src['text']), vi))
-        ctx = TransContext(previous=prev, glossary=glossary)
+        ctx = TransContext(previous=prev, glossary=glossary, style=style,
+                           source_language=source_language)
         transcues = [TransCue(cue_id=c['id'], start_ms=c['start_ms'], end_ms=c['end_ms'], text=c['text']) for c in batch]
         if hasattr(provider, 'translate_batch_with_model'):
             result, used = provider.translate_batch_with_model(transcues, ctx)

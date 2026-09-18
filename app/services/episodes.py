@@ -79,6 +79,7 @@ def get_or_create_series(info: SeriesInfo, source_url: str) -> Series:
 
 def sync_episodes(series: Series, infos: list[EpisodeInfo]) -> list[Episode]:
     """Upsert episodes (no duplicates on re-resolve). Returns rows in order."""
+    import json
     rows: list[Episode] = []
     with SessionLocal.begin() as db:
         for info in infos:
@@ -89,7 +90,8 @@ def sync_episodes(series: Series, infos: list[EpisodeInfo]) -> list[Episode]:
                 row = Episode(series_id=series.id, provider_episode_id=info.provider_episode_id,
                               episode_number=info.episode_number, title=info.title,
                               duration=info.duration, locked=info.locked,
-                              status='locked' if info.locked else 'discovered')
+                              status='locked' if info.locked else 'discovered',
+                              episode_metadata=json.dumps(info.metadata) if info.metadata else None)
                 db.add(row)
                 db.flush()
             else:
@@ -97,7 +99,9 @@ def sync_episodes(series: Series, infos: list[EpisodeInfo]) -> list[Episode]:
                 row.title = info.title or row.title
                 row.duration = info.duration if info.duration is not None else row.duration
                 row.locked = info.locked
+                row.episode_metadata = json.dumps(info.metadata) if info.metadata else row.episode_metadata
                 if info.locked and row.status not in ('ready',):
+
                     row.status = 'locked'
                 elif not info.locked and row.status == 'locked':
                     row.status = 'discovered'
@@ -434,14 +438,11 @@ def process_episode_job(job_id: str, worker_id: str) -> None:
                 try:
                     result = provider.download_episode(playback, video_path)
                 except SourceError as dl_exc:
-                    # Signed URL may have expired between resolve and download:
-                    # re-resolve once, then retry once.
-                    if dl_exc.code == 'DRAMAWAVE_DOWNLOAD_FAILED' and _looks_expired(str(dl_exc)):
-                        logger.info('dramawave playback possibly expired job=%s, re-resolving', job_id[:8])
-                        playback = provider.refresh_playback(match)
-                        result = provider.download_episode(playback, video_path)
-                    else:
-                        raise
+                    # Retry downloading. With multi-provider, auto will find a fallback
+                    logger.info('dramawave playback failed job=%s error=%s, re-resolving', job_id[:8], str(dl_exc))
+                    playback = provider.resolve_episode(match, quality=(j.requested_quality or None))
+                    result = provider.download_episode(playback, video_path)
+                    
                 with SessionLocal.begin() as db:
                     j = db.get(EpisodeJob, job_id)
                     j.original_path = str(result.path)
@@ -449,6 +450,13 @@ def process_episode_job(job_id: str, worker_id: str) -> None:
                     j.quality = result.quality
                     j.download_seconds = time.monotonic() - t0
                     j.progress = 45
+                    if playback.metadata:
+                        j.source_provider = playback.metadata.get('selected_provider')
+                        j.source_provider_series_id = playback.metadata.get('provider_series_id')
+                        j.source_provider_episode_id = playback.metadata.get('provider_episode_id')
+                        j.source_type = playback.metadata.get('type')
+                        j.source_quality = playback.metadata.get('quality')
+
                 logger.info('dramawave downloaded job=%s size=%s quality=%s seconds=%.1f',
                             job_id[:8], result.size_bytes, result.quality, result.download_seconds)
                 storage.put_file(video_path, f'{prefix}/original.mp4')

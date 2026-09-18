@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% set active = "jobs" %}
+{% block title %}Jobs · DramaWave Studio{% endblock %}
+{% block content %}
+<h1>Jobs</h1>
+<div class="tabs" role="tablist">
+  <button data-f="all" class="on">All</button>
+  <button data-f="processing">Processing</button>
+  <button data-f="completed">Completed</button>
+  <button data-f="failed">Failed</button>
+</div>
+<div id="jobs-state" class="state">Đang tải...</div>
+<div id="jobs-list" class="joblist"></div>
+{% endblock %}
+{% block scripts %}
+<script>StudioJobs.init();</script>
+{% endblock %}

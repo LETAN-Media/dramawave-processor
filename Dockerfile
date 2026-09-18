@@ -14,6 +14,6 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
-RUN mkdir -p /tmp/bilibili-processor /var/lib/bilibili-processor/storage
+RUN mkdir -p /tmp/dramawave-processor /var/lib/dramawave-processor/storage
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8100"]

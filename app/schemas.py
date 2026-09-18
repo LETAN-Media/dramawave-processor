@@ -43,7 +43,7 @@ class HealthOut(BaseModel):
     worker: bool
     worker_last_seen_at: datetime | None = None
     dramawave: dict | None = None
-    dramawave_api: dict | None = None
+    drama_source_api: dict | None = None
     asr: dict | None = None
     translation: dict | None = None
     tts: dict | None = None
@@ -65,6 +65,13 @@ class EpisodeJobOut(BaseModel):
     source_language: str | None = None
     subtitle_cue_count: int | None = None
     playback_type: str | None = None
+    source_provider: str | None = None
+    source_provider_series_id: str | None = None
+    source_provider_episode_id: str | None = None
+    source_type: str | None = None
+    source_quality: str | None = None
+    source_fallback_count: int | None = None
+
     quality: str | None = None
     error_code: str | None = None
     error_message: str | None = None

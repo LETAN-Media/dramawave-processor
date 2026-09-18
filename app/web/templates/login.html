@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0b12">
+<title>Đăng nhập · DramaWave Studio</title>
+<link rel="stylesheet" href="/static/style.css?v={{ static_version }}">
+</head>
+<body>
+<main class="wrap narrow">
+  <h1>DramaWave Studio</h1>
+  <form class="panel" method="post" action="/login">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>Tài khoản <input name="username" autocomplete="username" required></label>
+    <label>Mật khẩu <input name="password" type="password" autocomplete="current-password" required></label>
+    {% if error %}<p class="error">{{ error }}</p>{% endif %}
+    <button class="primary big" type="submit">Đăng nhập</button>
+  </form>
+</main>
+</body>
+</html>

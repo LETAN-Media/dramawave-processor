@@ -17,7 +17,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import desc, select
 
 from app import web_auth
-from app.clients import dramawave_api as api
+from app.clients import drama_source_api as api
 from app.config import settings
 from app.db import SessionLocal
 from app.models import Episode, EpisodeJob, Series
@@ -28,6 +28,13 @@ logger = logging.getLogger('studio-web')
 
 router = APIRouter()
 templates = Jinja2Templates(directory=str(Path(__file__).parent / 'templates'))
+
+
+def _static_version() -> str:
+    try:
+        return str(int(Path(__file__).parent.joinpath('static', 'app.js').stat().st_mtime))
+    except OSError:
+        return '1'
 
 QUALITIES = ['best', '1080p', '720p', '540p', '480p']
 VOICES = [
@@ -64,6 +71,7 @@ def _template_ctx(request: Request, **extra: Any) -> dict:
         'app_name': 'DramaWave Studio',
         'user': web_auth.current_web_user(request),
         'auth_enabled': web_auth.dashboard_auth_enabled(),
+        'static_version': _static_version(),
         **extra,
     }
 
@@ -101,12 +109,12 @@ def _import_series(pid: str) -> tuple[Series, list[Episode]]:
     except api.DramaApiError as exc:
         raise HTTPException(status_code=502, detail=_friendly_api_error(exc)) from exc
     info = SeriesInfo(
-        provider='dramawave', provider_series_id=str(data.get('series_id') or pid),
-        title=str(data.get('title') or pid),
+        provider='multi', provider_series_id=str(data.get('canonical_series_id') or pid),
+        title=str(data.get('canonical_title') or pid),
         description=str(data.get('description') or ''),
         cover_url=str(data.get('cover_url') or ''),
         episode_count=data.get('episode_count'),
-        source_url=f'https://m.mydramawave.com/series/{pid}',
+        source_url=f'cw:{pid}' if not pid.startswith('cw:') else pid,
         metadata=dict(data.get('metadata') or {}))
     series = episode_service.get_or_create_series(info, info.source_url)
     try:
@@ -117,19 +125,22 @@ def _import_series(pid: str) -> tuple[Series, list[Episode]]:
 
     infos = []
     for e in raw.get('episodes') or []:
+        sources = e.get('sources') or []
+        free = any(s.get('status') == 'free' for s in sources)
         infos.append(EpisodeInfo(
-            provider_episode_id=str(e.get('episode_id')),
+            provider_episode_id=str(e.get('episode_number') or 0),
             episode_number=int(e.get('episode_number') or 0),
-            title=str(e.get('title') or ''),
-            duration=e.get('duration'),
-            locked=bool(e.get('locked', False)),
+            title=f"Episode {e.get('episode_number') or 0}",
+            duration=None,
+            locked=not free,
             source_url=info.source_url,
-            metadata={'series_id': pid, 'cover': e.get('cover')}))
+            metadata={'sources': sources}))
     rows = episode_service.sync_episodes(series, infos)
     return series, rows
 
 
 def _series_episode_state(series_id: str) -> list[dict]:
+    import json
     with SessionLocal() as db:
         eps = list(db.execute(select(Episode).where(Episode.series_id == series_id)
                               .order_by(Episode.episode_number)).scalars().all())
@@ -156,16 +167,22 @@ def _series_episode_state(series_id: str) -> list[dict]:
                 yt_state = 'failed'
             else:
                 yt_state = None
+                
+            try:
+                meta = json.loads(ep.episode_metadata) if ep.episode_metadata else {}
+            except Exception:
+                meta = {}
+            
             out.append({
-                'number': ep.episode_number, 'episode_id': ep.id,
-                'title': ep.title, 'duration': ep.duration,
-                'locked': bool(ep.locked), 'status': ep.status,
-                'job_id': job.id if job else None,
-                'job_status': job.status if job else None,
+                'id': ep.id,
+                'number': ep.episode_number,
+                'title': ep.title,
+                'locked': ep.locked,
+                'sources': meta.get('sources') or [],
+                'status': ep.status,
                 'progress': job.progress if job else 0,
-                'current_stage': job.current_stage if job else ep.status,
-                'has_final': bool(job and job.final_path and Path(job.final_path).exists()),
-                'youtube': yt_state,
+                'job_id': job.id if job else None,
+                'yt_status': yt_state,
             })
         return out
 
@@ -269,7 +286,7 @@ def _valid_next(value: str | None) -> str:
 
 # -- auth pages ------------------------------------------------------------
 
-@router.get('/login', response_class=HTMLResponse)
+@router.api_route('/login', response_class=HTMLResponse, methods=["GET", "HEAD"])
 def login_page(request: Request, next: str = '/'):
     if web_auth.current_web_user(request) is not None:
         return RedirectResponse(url=_valid_next(next), status_code=303)
@@ -305,7 +322,7 @@ def logout(request: Request):
 
 # -- pages -----------------------------------------------------------------
 
-@router.get('/', response_class=HTMLResponse)
+@router.api_route('/', response_class=HTMLResponse, methods=["GET", "HEAD"])
 def home(request: Request):
     user = web_auth.current_web_user(request)
     if user is None:
@@ -316,7 +333,7 @@ def home(request: Request):
                               qualities=QUALITIES, voices=VOICES))
 
 
-@router.get('/series/{provider_series_id}', response_class=HTMLResponse)
+@router.api_route('/series/{provider_series_id}', response_class=HTMLResponse, methods=["GET", "HEAD"])
 def series_page(request: Request, provider_series_id: str):
     user = web_auth.current_web_user(request)
     if user is None:
@@ -331,7 +348,7 @@ def series_page(request: Request, provider_series_id: str):
                               default_voice=settings.tts_voice))
 
 
-@router.get('/jobs', response_class=HTMLResponse)
+@router.api_route('/jobs', response_class=HTMLResponse, methods=["GET", "HEAD"])
 def jobs_page(request: Request):
     user = web_auth.current_web_user(request)
     if user is None:
@@ -340,7 +357,7 @@ def jobs_page(request: Request):
                                         context=_template_ctx(request))
 
 
-@router.get('/jobs/{job_id}', response_class=HTMLResponse)
+@router.api_route('/jobs/{job_id}', response_class=HTMLResponse, methods=["GET", "HEAD"])
 def job_page(request: Request, job_id: str):
     user = web_auth.current_web_user(request)
     if user is None:
@@ -352,7 +369,7 @@ def job_page(request: Request, job_id: str):
                                         context=_template_ctx(request, job_id=job_id))
 
 
-@router.get('/settings', response_class=HTMLResponse)
+@router.api_route('/settings', response_class=HTMLResponse, methods=["GET", "HEAD"])
 def settings_page(request: Request):
     user = web_auth.current_web_user(request)
     if user is None:
@@ -534,10 +551,10 @@ def web_provider_status(request: Request):
 
     drama = api.health()
     return {
-        'dramawave_api': {
+        'drama_source_api': {
             'online': bool(drama.get('online')),
             'latency_ms': drama.get('latency_ms'),
-            'base_url': settings.dramawave_api_base_url,
+            'base_url': settings.drama_source_api_base_url,
             'error': drama.get('error'),
         },
         'processor': {'online': True, 'service': settings.app_name},

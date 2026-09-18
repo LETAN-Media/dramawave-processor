@@ -4,7 +4,7 @@ import re
 
 import pytest
 
-from app.bilibili.srt import (
+from app.media.srt import (
     TIMECODE_RE,
     format_timestamp,
     normalize_segments_to_srt,
@@ -118,7 +118,7 @@ def test_word_timestamps_generate_tighter_cues():
 
 
 def test_generated_srt_can_be_parsed_again(tmp_path):
-    from app.bilibili.srt import write_srt
+    from app.media.srt import write_srt
 
     srt = normalize_segments_to_srt(_sample_segments())
     # Must look exactly like the required sample shape.

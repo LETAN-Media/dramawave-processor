@@ -1,0 +1,35 @@
+# Example reverse proxy for DramaWave Studio (single FastAPI service).
+# Domain: drama.toolnet.tech (DNS + certbot handled outside this repo).
+#
+#   sudo cp nginx/dramawave-studio.conf.example /etc/nginx/sites-available/drama.toolnet.tech
+#   sudo ln -s /etc/nginx/sites-available/drama.toolnet.tech /etc/nginx/sites-enabled/
+#   sudo certbot --nginx -d drama.toolnet.tech
+#   sudo nginx -t && sudo systemctl reload nginx
+#
+# Media is streamed through the app (job_id lookup only, Range supported),
+# so no /media alias is needed. Keep /docs reachable for debugging.
+
+upstream dramawave_studio {
+    server 127.0.0.1:8100;
+    keepalive 32;
+}
+
+server {
+    listen 80;
+    server_name drama.toolnet.tech;
+
+    client_max_body_size 16m;
+    # Resolver cold starts + long polls: don't cut slow responses.
+    proxy_read_timeout 300s;
+    proxy_connect_timeout 10s;
+    proxy_send_timeout 300s;
+
+    location / {
+        proxy_pass http://dramawave_studio;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}

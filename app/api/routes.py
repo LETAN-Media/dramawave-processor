@@ -74,9 +74,9 @@ def health() -> HealthOut:
         worker=worker_ok,
         worker_last_seen_at=last_seen,
         dramawave={'available': bool(settings.dramawave_enabled)},
-        dramawave_api={
-            'base_url': settings.dramawave_api_base_url,
-            'configured': bool((settings.dramawave_api_base_url or '').strip()),
+        drama_source_api={
+            'base_url': settings.drama_source_api_base_url,
+            'configured': bool((settings.drama_source_api_base_url or '').strip()),
         },
         asr={'jianying_available': jianying_available, 'whisper_available': whisper_available},
         translation={
@@ -87,6 +87,29 @@ def health() -> HealthOut:
         },
         tts={'provider': settings.tts_provider, 'voice': settings.tts_voice, 'available': tts_available},
     )
+
+
+@router.get('/v1/jobs', dependencies=[Depends(require_api_key)])
+def list_jobs(status: str = Query(default='all'),
+              limit: int = Query(default=100, ge=1, le=200)) -> dict:
+    """List episode jobs newest-first. status=all|processing|completed|failed."""
+    from sqlalchemy import desc as _desc
+
+    filt = (status or 'all').strip().lower()
+    if filt not in ('all', 'processing', 'completed', 'failed'):
+        raise HTTPException(status_code=422, detail='status must be all|processing|completed|failed')
+    with SessionLocal() as db:
+        rows = list(db.execute(select(EpisodeJob).order_by(_desc(EpisodeJob.created_at))
+                               .limit(limit)).scalars().all())
+        items = []
+        for job in rows:
+            bucket = ('completed' if job.status in ('completed', 'published')
+                      else 'failed' if job.status in ('failed', 'youtube_upload_failed')
+                      else 'processing')
+            if filt != 'all' and bucket != filt:
+                continue
+            items.append(EpisodeJobOut.model_validate(job).model_dump())
+        return {'items': items, 'total': len(items)}
 
 
 @router.get('/v1/jobs/{job_id}', response_model=EpisodeJobOut, dependencies=[Depends(require_api_key)])
@@ -122,7 +145,7 @@ def list_series_episodes(series_id: str) -> list[EpisodeOut]:
 
 @router.get('/v1/drama/search', dependencies=[Depends(require_api_key)])
 def drama_search(q: str = Query(min_length=1, max_length=200)) -> dict:
-    from app.clients import dramawave_api as api
+    from app.clients import drama_source_api as api
 
     try:
         return {'items': api.search(q.strip())}
@@ -132,7 +155,7 @@ def drama_search(q: str = Query(min_length=1, max_length=200)) -> dict:
 
 @router.get('/v1/drama/series/{series_id}', dependencies=[Depends(require_api_key)])
 def drama_series(series_id: str) -> dict:
-    from app.clients import dramawave_api as api
+    from app.clients import drama_source_api as api
 
     try:
         return api.get_series(series_id)
@@ -143,7 +166,7 @@ def drama_series(series_id: str) -> dict:
 
 @router.get('/v1/drama/series/{series_id}/episodes', dependencies=[Depends(require_api_key)])
 def drama_episodes(series_id: str) -> dict:
-    from app.clients import dramawave_api as api
+    from app.clients import drama_source_api as api
 
     try:
         data = api.list_episodes(series_id)
@@ -319,6 +342,6 @@ def get_final(job_id: str):
 
 @router.get('/v1/drama/provider-status', dependencies=[Depends(require_api_key)])
 def drama_provider_status() -> dict:
-    from app.clients import dramawave_api as api
+    from app.clients import drama_source_api as api
 
     return api.health()

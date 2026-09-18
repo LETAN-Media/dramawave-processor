@@ -1,11 +1,10 @@
 """Build voice.vi.wav: silent base = video duration, overlay each TTS clip at cue.start_ms.
 
-Uses stdlib audioop (no 1000-input ffmpeg filter graphs). Silence gaps preserved.
+Uses stdlib wave/array + ffmpeg decode (no 1000-input filter graphs). Silence gaps preserved.
 """
 
 from __future__ import annotations
 
-import audioop
 import logging
 import subprocess
 import wave

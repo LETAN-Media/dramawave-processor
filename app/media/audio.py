@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app.config import settings
 
-logger = logging.getLogger('bilibili-audio')
+logger = logging.getLogger('media-audio')
 
 
 def ffprobe_duration(path: Path) -> float | None:
@@ -28,8 +28,8 @@ def extract_compressed_audio(
     workdir: Path,
     *,
     job_id: str | None = None,
-    bvid: str | None = None,
-    cid: str | None = None,
+    series_id: str | None = None,
+    episode: int | str | None = None,
 ) -> Path:
     """Lightweight AAC mono 16kHz 48k for remote ASR upload.
 
@@ -41,7 +41,7 @@ def extract_compressed_audio(
     workdir.mkdir(parents=True, exist_ok=True)
     out = workdir / 'audio.m4a'
     if out.exists() and out.stat().st_size > 0:
-        logger.info('compressed audio exists, reuse job_id=%s bvid=%s cid=%s file=%s', job_id, bvid, cid, out)
+        logger.info('compressed audio exists, reuse job_id=%s series=%s ep=%s file=%s', job_id, series_id, episode, out)
         return out
     cmd = [
         'ffmpeg', '-y',
@@ -54,8 +54,8 @@ def extract_compressed_audio(
         str(out),
     ]
     logger.info(
-        'compressed audio extract start job_id=%s bvid=%s cid=%s sr=%s ch=%s',
-        job_id, bvid, cid, settings.audio_sample_rate, settings.audio_channels,
+        'compressed audio extract start job_id=%s series=%s ep=%s sr=%s ch=%s',
+        job_id, series_id, episode, settings.audio_sample_rate, settings.audio_channels,
     )
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
@@ -69,8 +69,8 @@ def extract_compressed_audio(
     audio_dur = ffprobe_duration(out)
     video_dur = ffprobe_duration(video_path)
     logger.info(
-        'compressed audio extract done job_id=%s bvid=%s cid=%s file=%s size=%s audio_duration=%s video_duration=%s',
-        job_id, bvid, cid, out, out.stat().st_size, audio_dur, video_dur,
+        'compressed audio extract done job_id=%s series=%s ep=%s file=%s size=%s audio_duration=%s video_duration=%s',
+        job_id, series_id, episode, out, out.stat().st_size, audio_dur, video_dur,
     )
     return out
 
@@ -80,8 +80,8 @@ def extract_audio(
     workdir: Path,
     *,
     job_id: str | None = None,
-    bvid: str | None = None,
-    cid: str | None = None,
+    series_id: str | None = None,
+    episode: int | str | None = None,
 ) -> Path:
     """Run ffmpeg -vn -ac 1 -ar 16000 -c:a pcm_s16le. Streams from disk."""
     if not video_path.exists():
@@ -90,7 +90,7 @@ def extract_audio(
     out = workdir / 'audio.wav'
     # Resume: if wav already exists and looks valid, reuse.
     if out.exists() and out.stat().st_size > 0:
-        logger.info('audio exists, reuse job_id=%s bvid=%s cid=%s file=%s', job_id, bvid, cid, out)
+        logger.info('audio exists, reuse job_id=%s series=%s ep=%s file=%s', job_id, series_id, episode, out)
         return out
     cmd = [
         'ffmpeg', '-y',
@@ -102,8 +102,8 @@ def extract_audio(
         str(out),
     ]
     logger.info(
-        'audio extract start job_id=%s bvid=%s cid=%s sr=%s ch=%s',
-        job_id, bvid, cid, settings.audio_sample_rate, settings.audio_channels,
+        'audio extract start job_id=%s series=%s ep=%s sr=%s ch=%s',
+        job_id, series_id, episode, settings.audio_sample_rate, settings.audio_channels,
     )
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
@@ -117,7 +117,7 @@ def extract_audio(
     audio_dur = ffprobe_duration(out)
     video_dur = ffprobe_duration(video_path)
     logger.info(
-        'audio extract done job_id=%s bvid=%s cid=%s file=%s size=%s audio_duration=%s video_duration=%s',
-        job_id, bvid, cid, out, out.stat().st_size, audio_dur, video_dur,
+        'audio extract done job_id=%s series=%s ep=%s file=%s size=%s audio_duration=%s video_duration=%s',
+        job_id, series_id, episode, out, out.stat().st_size, audio_dur, video_dur,
     )
     return out
