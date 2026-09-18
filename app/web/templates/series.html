@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% set active = "home" %}
+{% block title %}Series · DramaWave Studio{% endblock %}
+{% block content %}
+<div id="series" data-pid="{{ provider_series_id }}">
+  <div id="series-state" class="state">Đang tải thông tin phim...</div>
+  <div id="series-head" hidden></div>
+  <form id="process-form" hidden>
+    <fieldset class="panel">
+      <legend>Chọn tập</legend>
+      <div class="row">
+        <label>Từ tập <input id="from-ep" type="number" min="1" value="1" inputmode="numeric"></label>
+        <label>Đến tập <input id="to-ep" type="number" min="1" value="5" inputmode="numeric"></label>
+      </div>
+      <div class="row btns">
+        <button type="button" data-range="1-5">1–5</button>
+        <button type="button" data-range="6-10">6–10</button>
+        <button type="button" data-range="allfree">Tất cả free</button>
+      </div>
+      <p class="hint">Mặc định chỉ chọn tập FREE. Tập LOCKED bị khóa, không gửi được.</p>
+    </fieldset>
+    <fieldset class="panel">
+      <legend>Tùy chọn xử lý</legend>
+      <label>Quality
+        <select id="opt-quality">
+          {% for q in qualities %}<option value="{{ q }}" {% if q==default_quality %}selected{% endif %}>{{ q }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Giọng đọc
+        <select id="opt-voice">
+          {% for v in voices %}<option value="{{ v.id }}" {% if v.id==default_voice %}selected{% endif %}>{{ v.label }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Phong cách dịch
+        <select id="opt-style">
+          {% for s in styles %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Nguồn <input value="Auto" disabled></label>
+      <label>Đích <input value="Vietnamese" disabled></label>
+    </fieldset>
+    <fieldset class="panel">
+      <legend>YouTube Upload</legend>
+      <label><input id="opt-yt" type="checkbox"> Tự động đăng sau khi render</label>
+      <label>YouTube Channel <select id="opt-yt-channel"><option value="">—</option></select></label>
+      <label>Privacy
+        <select id="opt-yt-privacy"><option value="public">Public</option><option value="unlisted">Unlisted</option><option value="private">Private</option></select>
+      </label>
+      <label>Metadata
+        <select id="opt-yt-meta"><option value="auto">Auto</option><option value="template">Template</option></select>
+      </label>
+      <p class="hint">Upload sau khi render PASS. Render nhiều tập nhưng upload tuần tự từng tập.</p>
+    </fieldset>
+    <div class="sticky-action">
+      <button id="start-btn" type="submit" class="primary big">Bắt đầu xử lý</button>
+    </div>
+    <p id="process-state" class="state" hidden></p>
+  </form>
+  <h2>Danh sách tập</h2>
+  <div id="ep-list" class="eplist"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+StudioSeries.init(document.getElementById('series').dataset.pid);
+</script>
+{% endblock %}

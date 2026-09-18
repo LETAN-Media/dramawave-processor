@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% set active = "settings" %}
+{% block title %}Settings · DramaWave Studio{% endblock %}
+{% block content %}
+<h1>Cài đặt</h1>
+<div id="settings-state" class="state">Đang tải...</div>
+<div id="settings-body" hidden>
+  <section class="panel">
+    <h2>Mặc định xử lý</h2>
+    <label>Default quality
+      <select id="set-quality">{% for q in qualities %}<option value="{{ q }}" {% if q==default_quality %}selected{% endif %}>{{ q }}</option>{% endfor %}</select>
+    </label>
+    <label>Default voice
+      <select id="set-voice">{% for v in voices %}<option value="{{ v.id }}" {% if v.id==default_voice %}selected{% endif %}>{{ v.label }}</option>{% endfor %}</select>
+    </label>
+    <label>Translation style
+      <select id="set-style">{% for s in styles %}<option value="{{ s }}">{{ s }}</option>{% endfor %}</select>
+    </label>
+    <p class="hint">Lưu trên thiết bị này, dùng làm mặc định cho form xử lý.</p>
+    <button id="set-save" type="button">Lưu mặc định</button>
+  </section>
+  <section class="panel">
+    <h2>YouTube</h2>
+    <div id="yt-state" class="state">Đang tải...</div>
+    <div id="yt-list"></div>
+    <div class="dlrow">
+      <a id="yt-connect" href="/auth/youtube">Connect YouTube</a>
+    </div>
+    <p id="yt-callback" class="hint"></p>
+    <h3>Mặc định đăng</h3>
+    <label>Default YouTube Channel <select id="set-yt-channel"><option value="">—</option></select></label>
+    <label>Default Auto Upload
+      <select id="set-yt-auto"><option value="off">OFF</option><option value="on">ON</option></select>
+    </label>
+    <label>Default Privacy
+      <select id="set-yt-privacy"><option value="public">Public</option><option value="unlisted">Unlisted</option><option value="private">Private</option></select>
+    </label>
+    <label>Default Metadata
+      <select id="set-yt-meta"><option value="auto">Auto</option><option value="template">Template</option></select>
+    </label>
+  </section>
+  <section class="panel">
+    <h2>Trạng thái provider</h2>
+    <dl id="provider-status" class="kv"></dl>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>StudioSettings.init();</script>
+{% endblock %}

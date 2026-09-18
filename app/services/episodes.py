@@ -130,8 +130,23 @@ def persist_series_metadata(series: Series, info: SeriesInfo, episodes: list[Epi
 
 def enqueue_episodes(series_id: str, from_ep: int = 1, to_ep: int | None = None,
                      force: bool = False, quality: str | None = None,
-                     target_language: str | None = None, voice: str | None = None) -> dict:
+                     target_language: str | None = None, voice: str | None = None,
+                     youtube_enabled: bool = False, youtube_destination_id: str | None = None,
+                     youtube_privacy: str | None = None,
+                     youtube_metadata_mode: str | None = None) -> dict:
     """Enqueue unlocked episodes in [from_ep, to_ep]. Skips ready unless force."""
+    if youtube_enabled:
+        from app.youtube.service import normalize_privacy
+
+        if not youtube_destination_id:
+            raise SourceError('YOUTUBE_DESTINATION_NOT_FOUND', 'no channel selected')
+        from app.youtube.credentials import get_destination
+
+        dest = get_destination(youtube_destination_id)
+        if dest is None or not dest.is_active:
+            raise SourceError('YOUTUBE_DESTINATION_NOT_FOUND', youtube_destination_id[:16])
+        youtube_privacy = normalize_privacy(youtube_privacy)
+        youtube_metadata_mode = (youtube_metadata_mode or 'auto').strip().lower() or 'auto'
     with SessionLocal() as db:
         series = db.get(Series, series_id)
         if series is None:
@@ -156,7 +171,10 @@ def enqueue_episodes(series_id: str, from_ep: int = 1, to_ep: int | None = None,
             if job is None:
                 job = EpisodeJob(episode_id=ep.id, status='queued', current_stage='queued',
                                  requested_quality=quality, target_language=target_language,
-                                 voice=voice)
+                                 voice=voice, youtube_enabled=bool(youtube_enabled),
+                                 youtube_destination_id=youtube_destination_id,
+                                 youtube_privacy=youtube_privacy,
+                                 youtube_metadata_mode=youtube_metadata_mode)
                 db.add(job)
                 db.flush()
             else:
@@ -173,6 +191,10 @@ def enqueue_episodes(series_id: str, from_ep: int = 1, to_ep: int | None = None,
                     job.target_language = target_language
                 if voice:
                     job.voice = voice
+                job.youtube_enabled = bool(youtube_enabled)
+                job.youtube_destination_id = youtube_destination_id
+                job.youtube_privacy = youtube_privacy
+                job.youtube_metadata_mode = youtube_metadata_mode
             ep_row = db.get(Episode, ep.id)
             if ep_row.status != 'ready' or force:
                 ep_row.status = 'queued'
@@ -260,7 +282,13 @@ _EP_STAGE_ORDER = [
     'detecting_language', 'transcribing', 'validating_source_srt',
     'translating', 'validating_translation', 'generating_tts',
     'syncing_voice', 'rendering', 'validating_final', 'completed',
+    'ready_to_upload', 'uploading_youtube', 'youtube_processing', 'published',
 ]
+
+# Terminal/YouTube-owned job statuses the episode worker must never re-claim.
+# Uploads are driven by the upload pump (concurrency + interval + recovery).
+YOUTUBE_OWNED_STATUSES = ('ready_to_upload', 'uploading_youtube', 'published',
+                          'youtube_upload_failed')
 
 
 def _stage_reached(current: str | None, target: str) -> bool:
@@ -278,6 +306,55 @@ def _valid_file(path: str | None) -> Path | None:
     except (TypeError, ValueError):
         return None
     return p if p.exists() and p.stat().st_size > 0 else None
+
+
+def _finish_for_youtube(job_id: str, ep: Episode, destination_id: str,
+                        privacy: str | None) -> None:
+    """Gate final video, create the upload publication, park job at ready_to_upload.
+
+    Render artifacts are final here; any YouTube-side problem is recorded as
+    youtube_upload_failed while the episode stays 'ready' (render NOT failed).
+    """
+    from app.youtube.service import (YouTubeServiceError, get_or_create_publication,
+                                     validate_final_for_upload)
+
+    with SessionLocal() as db:
+        job = db.get(EpisodeJob, job_id)
+        if job is None:
+            raise RuntimeError('Episode job disappeared')
+        final_path, original_path = job.final_path, job.original_path
+    try:
+        validate_final_for_upload(final_path, original_path)
+        get_or_create_publication(job_id, destination_id, privacy or 'public')
+    except YouTubeServiceError as exc:
+        with SessionLocal.begin() as db:
+            job = db.get(EpisodeJob, job_id)
+            if job is not None:
+                job.status = 'youtube_upload_failed'
+                job.current_stage = 'uploading_youtube'
+                job.error_code = exc.code[:64]
+                job.error_message = exc.message[:2000]
+                job.lease_owner = None
+                job.lease_until = None
+                job.heartbeat_at = utcnow()
+        logger.warning('youtube gating failed job=%s code=%s (render kept)',
+                       job_id[:8], exc.code)
+        return
+    with SessionLocal.begin() as db:
+        job = db.get(EpisodeJob, job_id)
+        if job is not None:
+            job.status = 'ready_to_upload'
+            job.current_stage = 'ready_to_upload'
+            job.progress = 95
+            job.error_code = None
+            job.error_message = None
+            job.lease_owner = None
+            job.lease_until = None
+            job.heartbeat_at = utcnow()
+            ep_row = db.get(Episode, ep.id)
+            if ep_row is not None and ep_row.status != 'ready':
+                ep_row.status = 'ready'
+    logger.info('youtube queued job=%s dest=%s', job_id[:8], destination_id[:8])
 
 
 def _fail_episode(job_id: str, code: str, message: str) -> None:
@@ -449,16 +526,25 @@ def process_episode_job(job_id: str, worker_id: str) -> None:
             _tts_episode_voice(job_id, series, ep, workdir, prefix, storage)
             # ---- Phase 3: render ----
             _render_episode(job_id, series, ep, workdir, prefix, storage, video_path)
+            # ---- Phase 4: YouTube (optional) ----
+            with SessionLocal() as db:
+                _j = db.get(EpisodeJob, job_id)
+                _yt_on = bool(_j.youtube_enabled) if _j else False
+                _yt_dest = _j.youtube_destination_id if _j else None
+                _yt_privacy = _j.youtube_privacy if _j else None
+            if _yt_on and _yt_dest:
+                _finish_for_youtube(job_id, ep, _yt_dest, _yt_privacy)
             with SessionLocal.begin() as db:
                 j = db.get(EpisodeJob, job_id)
-                j.status = 'completed'
-                j.current_stage = 'completed'
-                j.progress = 100
-                j.completed_at = utcnow()
-                j.lease_owner = None
-                j.lease_until = None
-                j.heartbeat_at = utcnow()
-                db.get(Episode, ep.id).status = 'ready'
+                if j.status not in ('ready_to_upload', 'youtube_upload_failed'):
+                    j.status = 'completed'
+                    j.current_stage = 'completed'
+                    j.progress = 100
+                    j.completed_at = utcnow()
+                    j.lease_owner = None
+                    j.lease_until = None
+                    j.heartbeat_at = utcnow()
+                    db.get(Episode, ep.id).status = 'ready'
                 _snapshot_job(db, j, workdir)
             storage.put_file(workdir / 'job.json', f'{prefix}/job.json')
             logger.info('dramawave episode completed job=%s ep=%s cues=%s total=%.1fs',

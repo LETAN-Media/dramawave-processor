@@ -124,6 +124,16 @@ class Settings(BaseSettings):
     video_quality: str = '1080p'
     episode_concurrency: int = 2
 
+    # --- Google OAuth / YouTube publishing (all optional until connected) ---
+    google_client_id: str | None = None
+    google_client_secret: str | None = None
+    youtube_redirect_uri: str | None = None
+    youtube_default_privacy: str = 'public'
+    youtube_auto_upload: bool = False
+    youtube_upload_concurrency: int = 1
+    youtube_upload_interval_seconds: int = 0
+    app_encryption_key: str | None = None
+
     # --- DramaWave Studio web UI (dashboard auth; empty = open, set both to require login) ---
     dashboard_username: str | None = None
     dashboard_password: str | None = None
@@ -145,6 +155,14 @@ class Settings(BaseSettings):
         s = str(v or 'auto').strip().lower()
         if s not in {'jianying', 'whisper', 'auto'}:
             return 'auto'
+        return s
+
+    @field_validator('youtube_default_privacy', mode='before')
+    @classmethod
+    def _normalize_privacy(cls, v):
+        s = str(v or 'public').strip().lower()
+        if s not in {'public', 'unlisted', 'private'}:
+            return 'public'
         return s
 
 

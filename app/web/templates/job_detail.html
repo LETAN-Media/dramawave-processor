@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% set active = "jobs" %}
+{% block title %}Job · DramaWave Studio{% endblock %}
+{% block content %}
+<div id="job" data-id="{{ job_id }}">
+  <a class="back" href="/jobs">← Jobs</a>
+  <div id="job-state" class="state">Đang tải...</div>
+  <div id="job-body" hidden>
+    <h1 id="job-title"></h1>
+    <div class="progress big"><div id="job-bar"></div></div>
+    <p id="job-status" class="hint"></p>
+    <ol id="job-steps" class="steps"></ol>
+    <h2>Kết quả</h2>
+    <div id="job-output"></div>
+    <h2>YouTube</h2>
+    <div id="job-youtube"><p class="hint">Đang tải...</p></div>
+    <p id="job-error" class="error" hidden></p>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>StudioJob.init(document.getElementById('job').dataset.id);</script>
+{% endblock %}

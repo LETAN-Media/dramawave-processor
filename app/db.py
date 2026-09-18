@@ -81,10 +81,10 @@ def init_db() -> None:
             'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS tts_blocks_completed INTEGER',
             'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS voice_qa_round INTEGER',
             'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS overflow_blocks_remaining INTEGER',
-            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS tts_blocks_total INTEGER',
-            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS tts_blocks_completed INTEGER',
-            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS voice_qa_round INTEGER',
-            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS overflow_blocks_remaining INTEGER',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS youtube_enabled BOOLEAN',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS youtube_destination_id VARCHAR(36)',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS youtube_privacy VARCHAR(16)',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS youtube_metadata_mode VARCHAR(16)',
         ]
         with engine.begin() as conn:
             for stmt in stmts:
@@ -115,6 +115,10 @@ def _sqlite_backfill_episode_job_columns() -> None:
         'tts_blocks_completed': 'INTEGER',
         'voice_qa_round': 'INTEGER',
         'overflow_blocks_remaining': 'INTEGER',
+        'youtube_enabled': 'BOOLEAN',
+        'youtube_destination_id': 'VARCHAR(36)',
+        'youtube_privacy': 'VARCHAR(16)',
+        'youtube_metadata_mode': 'VARCHAR(16)',
     }
     try:
         existing = {c['name'] for c in inspect(engine).get_columns('episode_jobs')}

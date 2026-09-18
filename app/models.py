@@ -211,6 +211,10 @@ class EpisodeJob(Base):
     overflow_blocks_remaining: Mapped[int | None] = mapped_column(Integer)
     render_seconds: Mapped[float | None] = mapped_column(Float)
     voice_duration: Mapped[float | None] = mapped_column(Float)
+    youtube_enabled: Mapped[bool | None] = mapped_column(Boolean, default=False)
+    youtube_destination_id: Mapped[str | None] = mapped_column(String(36))
+    youtube_privacy: Mapped[str | None] = mapped_column(String(16))
+    youtube_metadata_mode: Mapped[str | None] = mapped_column(String(16))
     error_code: Mapped[str | None] = mapped_column(String(64))
     error_message: Mapped[str | None] = mapped_column(Text)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
@@ -221,6 +225,49 @@ class EpisodeJob(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class YouTubeDestination(Base):
+    """A connected YouTube channel. Multiple channels supported (no singleton)."""
+
+    __tablename__ = 'youtube_destinations'
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    youtube_channel_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    youtube_channel_title: Mapped[str | None] = mapped_column(Text)
+    refresh_token_encrypted: Mapped[str | None] = mapped_column(Text)  # Fernet, never plain text
+    scope: Mapped[str | None] = mapped_column(Text)  # space-joined granted scopes
+    is_active: Mapped[bool | None] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    last_upload_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+
+class YouTubePublication(Base):
+    """One upload of an EpisodeJob's final video to a destination channel."""
+
+    __tablename__ = 'youtube_publications'
+    __table_args__ = (UniqueConstraint('job_id', 'destination_id', name='uq_pub_job_dest'),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    job_id: Mapped[str] = mapped_column(String(36), index=True)
+    destination_id: Mapped[str] = mapped_column(String(36), index=True)
+    youtube_video_id: Mapped[str | None] = mapped_column(String(32), index=True)
+    youtube_url: Mapped[str | None] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    tags: Mapped[str | None] = mapped_column(Text)  # JSON list[str]
+    privacy: Mapped[str | None] = mapped_column(String(16), default='public')
+    upload_status: Mapped[str] = mapped_column(String(32), default='queued', index=True)
+    upload_progress: Mapped[int] = mapped_column(Integer, default=0)
+    upload_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    youtube_processing_status: Mapped[str | None] = mapped_column(String(32))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
 class WorkerHeartbeat(Base):
