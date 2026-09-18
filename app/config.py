@@ -1,18 +1,18 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file='.env', env_file_encoding='utf-8', extra='ignore')
 
-    app_name: str = 'bilibili-processor'
+    app_name: str = 'dramawave-processor'
     environment: str = 'development'
     api_key: str | None = None
 
-    database_url: str = 'sqlite:///./bilibili_processor.db'
+    database_url: str = 'sqlite:///./dramawave_processor.db'
 
     worker_id: str = 'worker-1'
     worker_poll_seconds: int = 3
@@ -20,10 +20,9 @@ class Settings(BaseSettings):
     job_lease_seconds: int = 180
     stale_job_max_age_hours: int = 24
 
-    work_dir: Path = Path('/tmp/bilibili-processor')
+    work_dir: Path = Path('/tmp/dramawave-processor')
     storage_provider: str = 'local'
-    local_storage_dir: Path = Path('/var/lib/bilibili-processor/storage')
-    persist_original_video: bool = True
+    local_storage_dir: Path = Path('/var/lib/dramawave-processor/storage')
 
     s3_endpoint_url: str | None = None
     s3_region: str = 'auto'
@@ -32,32 +31,11 @@ class Settings(BaseSettings):
     s3_secret_access_key: str | None = None
     s3_public_base_url: str | None = None
 
-    bilibili_cookies_file: Path | None = None
-    bilibili_user_agent: str = (
-        'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) '
-        'AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 '
-        'Mobile/15E148 Safari/604.1'
-    )
-    # Desktop UA for yt-dlp: iPhone UA forces m.bilibili generic extractor
-    # and breaks downloads. API calls keep the iPhone UA above.
-    bilibili_ytdlp_user_agent: str = (
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-        'AppleWebKit/537.36 (KHTML, like Gecko) '
-        'Chrome/126.0.0.0 Safari/537.36'
-    )
-    download_format: str = 'bv*[height<=1080]+ba/b[height<=1080]/b'
-    download_format_fallback: str = 'bv*[vcodec^=avc1][height<=480]+ba/b[height<=480]/b'
-    max_download_height: int = 1080
-    download_concurrent_fragments: int = 4
-    http_timeout_seconds: int = 20
+    # --- Languages (source auto-detected per episode, target always VI) ---
+    source_language: str = 'auto'
+    target_language: str = 'vi'
 
-    subtitle_preferred_languages: list[str] = Field(
-        default_factory=lambda: ['zh-CN', 'zh-Hans', 'zh-Hant', 'zh', 'ai-zh']
-    )
-    # asr | bilibili | auto (default asr: always use video audio)
-    subtitle_source_mode: str = 'asr'
-
-    # --- Chinese ASR (faster-whisper, CPU-only default) ---
+    # --- ASR (JianYing primary for zh, faster-whisper fallback/others) ---
     whisper_model: str = 'small'
     whisper_device: str = 'cpu'
     whisper_compute_type: str = 'int8'
@@ -96,6 +74,18 @@ class Settings(BaseSettings):
     translation_context_cues: int = 5
     translation_glossary: str = ''
 
+    # --- Primary-model circuit breaker (translation) ---
+    # After N transport timeouts the primary is skipped for the cooldown window
+    # and the fallback is used immediately (no more 120s waits per request).
+    translation_primary_failure_threshold: int = 1
+    translation_primary_cooldown_seconds: int = 600
+
+    # --- Voice QA fast AI path (small compression requests must stay fast) ---
+    voice_qa_ai_timeout: int = 20
+    voice_qa_primary_retries: int = 0
+    voice_qa_fallback_retries: int = 2
+    voice_qa_max_rounds: int = 2
+
     # --- Vietnamese TTS (Edge default; architecture open) ---
     tts_provider: str = 'edge'
     tts_voice: str = 'vi-VN-HoaiMyNeural'
@@ -117,6 +107,38 @@ class Settings(BaseSettings):
     qa_severe_overflow_ms: int = 250
     qa_severe_overflow_ratio: float = 0.10
 
+    # --- Speech-block voice (SRT stays immutable; blocks are audio-only) ---
+    voice_block_max_gap_ms: int = 250
+    voice_block_target_ms: int = 4500
+    voice_block_max_ms: int = 8000
+    voice_block_pref_tempo: float = 1.15
+
+    # --- DramaWave resolver API (Render; the ONLY DramaWave source) ---
+    dramawave_enabled: bool = True
+    dramawave_api_base_url: str = 'https://dramawave-api.onrender.com'
+    dramawave_api_token: str | None = None
+    dramawave_api_timeout: int = 90
+    dramawave_api_max_retries: int = 3
+
+    # --- Episode processing ---
+    video_quality: str = '1080p'
+    episode_concurrency: int = 2
+
+    # --- DramaWave Studio web UI (dashboard auth; empty = open, set both to require login) ---
+    dashboard_username: str | None = None
+    dashboard_password: str | None = None
+    dashboard_secret: str | None = None
+    dashboard_session_hours: int = 24
+
+    # --- Phase 3 render ---
+    subtitle_cover_enabled: bool = True
+    subtitle_cover_bottom_ratio: float = 0.22
+    subtitle_cover_opacity: float = 0.78
+    original_audio_volume: float = 0.20
+    vi_voice_volume: float = 1.0
+    render_preset: str = 'veryfast'
+    render_crf: int = 21
+
     @field_validator('asr_provider', mode='before')
     @classmethod
     def _normalize_asr_provider(cls, v):
@@ -124,33 +146,6 @@ class Settings(BaseSettings):
         if s not in {'jianying', 'whisper', 'auto'}:
             return 'auto'
         return s
-
-    @field_validator('subtitle_source_mode', mode='before')
-    @classmethod
-    def _normalize_subtitle_mode(cls, v):
-        s = str(v or 'asr').strip().lower()
-        if s not in {'asr', 'bilibili', 'auto'}:
-            return 'asr'
-        return s
-
-    @field_validator('bilibili_cookies_file', mode='before')
-    @classmethod
-    def _normalize_cookies_file(cls, v):
-        # Unset / None -> NO COOKIE
-        if v is None:
-            return None
-        # Already a Path (e.g. default): defensive normalize.
-        if isinstance(v, Path):
-            s = str(v).strip()
-            if not s or s == '.':
-                return None
-            return Path(s)
-        # Strings from env / .env: strip whitespace.
-        # "", "   " -> None (NO COOKIE). Never Path("") / Path(".").
-        s = str(v).strip()
-        if not s:
-            return None
-        return Path(s)
 
 
 @lru_cache

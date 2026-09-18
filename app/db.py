@@ -17,7 +17,10 @@ def init_db() -> None:
     from app import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
-    # Lightweight additive migration for existing deployments (no data loss).
+    # Additive migrations only (never drop: resume must survive restarts).
+    # New EpisodeJob progress columns (sqlite create_all does NOT add columns
+    # to existing tables, so backfill explicitly on both backends).
+    _sqlite_backfill_episode_job_columns()
     if not settings.database_url.startswith('sqlite'):
         from sqlalchemy import text
 
@@ -53,6 +56,35 @@ def init_db() -> None:
             'ALTER TABLE jobs ADD COLUMN IF NOT EXISTS phase2_started_at TIMESTAMPTZ',
             'ALTER TABLE jobs ADD COLUMN IF NOT EXISTS phase2_completed_at TIMESTAMPTZ',
             'ALTER TABLE jobs ADD COLUMN IF NOT EXISTS phase2_seconds DOUBLE PRECISION',
+            'ALTER TABLE series ADD COLUMN IF NOT EXISTS cover_url TEXT',
+            'ALTER TABLE series ADD COLUMN IF NOT EXISTS episode_count INTEGER',
+            'ALTER TABLE series ADD COLUMN IF NOT EXISTS translation_style VARCHAR(32)',
+            'ALTER TABLE series ADD COLUMN IF NOT EXISTS story_summary TEXT',
+            'ALTER TABLE series ADD COLUMN IF NOT EXISTS character_glossary TEXT',
+            'ALTER TABLE series ADD COLUMN IF NOT EXISTS relationship_glossary TEXT',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS original_path TEXT',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS source_srt_path TEXT',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS vi_srt_path TEXT',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS voice_path TEXT',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS final_path TEXT',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS source_language VARCHAR(16)',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS asr_fallback_used BOOLEAN',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS translation_seconds DOUBLE PRECISION',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS tts_seconds DOUBLE PRECISION',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS tts_timing_warnings INTEGER',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS requested_quality VARCHAR(16)',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS target_language VARCHAR(16)',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS voice VARCHAR(128)',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS render_seconds DOUBLE PRECISION',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS voice_duration DOUBLE PRECISION',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS tts_blocks_total INTEGER',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS tts_blocks_completed INTEGER',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS voice_qa_round INTEGER',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS overflow_blocks_remaining INTEGER',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS tts_blocks_total INTEGER',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS tts_blocks_completed INTEGER',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS voice_qa_round INTEGER',
+            'ALTER TABLE episode_jobs ADD COLUMN IF NOT EXISTS overflow_blocks_remaining INTEGER',
         ]
         with engine.begin() as conn:
             for stmt in stmts:
@@ -70,3 +102,27 @@ def init_db() -> None:
                 'ALTER TABLE cue_states ADD COLUMN IF NOT EXISTS final_tts_ms INTEGER'))
             conn.execute(text(
                 'ALTER TABLE cue_states ADD COLUMN IF NOT EXISTS manual_review_required BOOLEAN'))
+
+
+def _sqlite_backfill_episode_job_columns() -> None:
+    """ADD COLUMN backfill for sqlite (create_all skips existing tables)."""
+    if not settings.database_url.startswith('sqlite'):
+        return
+    from sqlalchemy import inspect, text
+
+    wanted = {
+        'tts_blocks_total': 'INTEGER',
+        'tts_blocks_completed': 'INTEGER',
+        'voice_qa_round': 'INTEGER',
+        'overflow_blocks_remaining': 'INTEGER',
+    }
+    try:
+        existing = {c['name'] for c in inspect(engine).get_columns('episode_jobs')}
+    except Exception:
+        return  # table genuinely missing; create_all above already handled it
+    missing = {k: v for k, v in wanted.items() if k not in existing}
+    if not missing:
+        return
+    with engine.begin() as conn:
+        for name, ddl in missing.items():
+            conn.execute(text(f'ALTER TABLE episode_jobs ADD COLUMN {name} {ddl}'))

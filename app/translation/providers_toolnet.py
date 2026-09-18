@@ -19,6 +19,93 @@ from app.translation.base import TransContext, TransCue, TranslationProvider
 
 logger = logging.getLogger('translation-toolnet')
 
+# -- Primary-model circuit breaker + call stats (process-global) --------------
+# After TRANSLATION_PRIMARY_FAILURE_THRESHOLD consecutive transport timeouts,
+# the primary model is skipped for TRANSLATION_PRIMARY_COOLDOWN_SECONDS and the
+# fallback is used immediately — no more 120s waits per request.
+import threading as _threading
+
+_BREAKER_LOCK = _threading.Lock()
+_BREAKER = {'model': None, 'failures': 0, 'opened_until': 0.0}
+_AI_STATS = {'primary_calls': 0, 'primary_timeouts': 0,
+             'fallback_calls': 0, 'fallback_errors': 0}
+
+
+def _is_transport_failure(exc: Exception) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    msg = str(exc)
+    return ('TRANSLATION_HTTP' in msg or 'curl exit 28' in msg
+            or 'stream deadline' in msg)
+
+
+def primary_unhealthy(model: str) -> bool:
+    """True when the breaker is open for this primary model."""
+    now = time.monotonic()
+    with _BREAKER_LOCK:
+        if _BREAKER['model'] != model:
+            return False
+        if now >= _BREAKER['opened_until']:
+            if _BREAKER['opened_until']:
+                logger.info('translation breaker closed model=%s (cooldown over)', model)
+            _BREAKER['model'] = None
+            _BREAKER['failures'] = 0
+            _BREAKER['opened_until'] = 0.0
+            return False
+        return True
+
+
+def _record_success(model: str, is_primary: bool) -> None:
+    with _BREAKER_LOCK:
+        if is_primary and _BREAKER['model'] == model:
+            _BREAKER['model'] = None
+            _BREAKER['failures'] = 0
+            _BREAKER['opened_until'] = 0.0
+
+
+def _record_transport_failure(model: str, is_primary: bool) -> None:
+    with _BREAKER_LOCK:
+        if is_primary:
+            _AI_STATS['primary_timeouts'] += 1
+            if _BREAKER['model'] != model:
+                _BREAKER['model'] = model
+                _BREAKER['failures'] = 0
+            _BREAKER['failures'] += 1
+            threshold = max(1, int(settings.translation_primary_failure_threshold or 1))
+            if _BREAKER['failures'] >= threshold:
+                cooldown = max(60, int(settings.translation_primary_cooldown_seconds or 600))
+                _BREAKER['opened_until'] = time.monotonic() + cooldown
+                logger.warning('translation breaker OPEN model=%s failures=%s cooldown=%ss',
+                               model, _BREAKER['failures'], cooldown)
+        else:
+            _AI_STATS['fallback_errors'] += 1
+
+
+def _record_call(is_primary: bool) -> None:
+    with _BREAKER_LOCK:
+        if is_primary:
+            _AI_STATS['primary_calls'] += 1
+        else:
+            _AI_STATS['fallback_calls'] += 1
+
+
+def ai_stats_snapshot() -> dict:
+    with _BREAKER_LOCK:
+        return dict(_AI_STATS)
+
+
+def breaker_snapshot() -> dict:
+    with _BREAKER_LOCK:
+        return dict(_BREAKER)
+
+
+def reset_ai_circuit() -> None:
+    """Reset breaker + stats (tests only)."""
+    with _BREAKER_LOCK:
+        _BREAKER.update(model=None, failures=0, opened_until=0.0)
+        for k in _AI_STATS:
+            _AI_STATS[k] = 0
+
 SYSTEM_PROMPT_TEMPLATE = (
     'Bạn là một biên dịch viên chuyên nghiệp chuyên dịch phụ đề phim và drama Trung Quốc sang tiếng Việt.\n'
     'Nhiệm vụ của bạn là dịch nội dung từng cue từ tiếng Trung sang tiếng Việt tự nhiên, hiện đại và phù hợp ngữ cảnh phim.\n'
@@ -45,14 +132,32 @@ SYSTEM_PROMPT_TEMPLATE = (
 )
 
 
-def system_prompt() -> str:
-    """Official translation prompt with live CPS target (single source of truth)."""
+def system_prompt(source_language: str = 'zh') -> str:
+    """Official translation prompt with live CPS target (single source of truth).
+
+    source_language parametrizes the prompt (zh/en/ko/ja/...); zh behavior
+    is byte-identical to the production-tested original.
+    """
     try:
         target = settings.cps_target
         cps = int(target) if float(target).is_integer() else target
     except (TypeError, ValueError):
         cps = 20
-    return SYSTEM_PROMPT_TEMPLATE.replace('__CPS__', str(cps))
+    text = SYSTEM_PROMPT_TEMPLATE.replace('__CPS__', str(cps))
+    lang = (source_language or 'zh').strip().lower()
+    if lang == 'zh':
+        return text
+    names = {'en': ('Anh', 'tiếng Anh'), 'ko': ('Hàn Quốc', 'tiếng Hàn'),
+             'ja': ('Nhật Bản', 'tiếng Nhật')}
+    name, tongue = names.get(lang, (lang, lang))
+    text = text.replace('Trung Quốc', name).replace('tiếng Trung', tongue).replace('Trung', name)
+    text = text.replace(
+        'dùng cách đọc Hán-Việt phù hợp (ví dụ: 北京 → Bắc Kinh). Không tự bịa tên nếu không chắc chắn.',
+        'giữ nguyên cách viết tên đã thống nhất trong glossary. Không tự bịa tên nếu không chắc chắn.')
+    text = text.replace(
+        'Không để lại chữ Trung Quốc trong text_vi trừ tên/ký hiệu cần giữ nguyên.',
+        'Không để lại chữ ngoại ngữ nguồn trong text_vi trừ tên/ký hiệu cần giữ nguyên.')
+    return text
 
 
 def _post_chat_stream(messages: list[dict], model: str, timeout: int, max_tokens: int) -> str:
@@ -242,8 +347,16 @@ def _extract_mapping(raw: str, expected_ids: list[int]) -> dict[int, str]:
     return mapping
 
 
+def _text_key(source_language: str) -> str:
+    return 'text_zh' if (source_language or 'zh').strip().lower() == 'zh' else 'text_source'
+
+
 def _user_payload(cues: list[TransCue], context: TransContext) -> str:
+    lang = (getattr(context, 'source_language', None) or 'zh').strip().lower()
+    key = _text_key(lang)
     return json.dumps({
+        'source_language': lang,
+        'translation_style': (getattr(context, 'style', None) or 'AUTO'),
         'previous_context': [
             {'id': c.cue_id, 'zh': c.text, 'vi': v} for c, v in context.previous
         ],
@@ -252,7 +365,7 @@ def _user_payload(cues: list[TransCue], context: TransContext) -> str:
             'relationships': context.glossary.get('relationships', {}),
             'pronouns': context.glossary.get('pronouns', {}),
         },
-        'current_cues': [{'id': c.cue_id, 'text_zh': c.text,
+        'current_cues': [{'id': c.cue_id, key: c.text,
                           'duration_ms': max(0, c.end_ms - c.start_ms)} for c in cues],
     }, ensure_ascii=False)
 
@@ -278,34 +391,82 @@ class OpenAICompatibleProvider(TranslationProvider):
     def fallback_models(self) -> list[str]:
         return self.models[1:]
 
-    def translate_batch_with_model(self, cues: list[TransCue], context: TransContext) -> tuple[dict[int, str], str]:
+    def translate_batch_with_model(self, cues: list[TransCue], context: TransContext,
+                                     source_language: str = 'zh') -> tuple[dict[int, str], str]:
         """Translate one batch, trying primary then fallbacks. Returns (mapping, model_used)."""
         if not cues:
             return {}, self.primary_model
+        lang = (source_language or getattr(context, 'source_language', None) or 'zh').strip().lower()
         messages = [
-            {'role': 'system', 'content': system_prompt()},
+            {'role': 'system', 'content': system_prompt(lang)},
             {'role': 'user', 'content': _user_payload(cues, context)},
         ]
         max_tokens = max(1000, 80 * len(cues))
         last_err: Exception | None = None
-        for model in self.models:
+        for idx, model in enumerate(self.models):
+            is_primary = idx == 0
+            if is_primary and primary_unhealthy(model):
+                logger.warning('translate batch skipping unhealthy primary model=%s', model)
+                continue
             for attempt in range(max(1, settings.translation_max_retries) + 1):
                 try:
                     t0 = time.monotonic()
+                    _record_call(is_primary)
                     raw = _post_chat_stream(messages, model, settings.translation_timeout, max_tokens)
                     mapping = _extract_mapping(raw, [c.cue_id for c in cues])
+                    _record_success(model, is_primary)
                     logger.info('translate batch ok model=%s cues=%s elapsed=%.1fs', model, len(cues), time.monotonic() - t0)
                     return mapping, model
                 except Exception as exc:  # noqa: BLE001 - failover across models
                     last_err = exc
+                    if _is_transport_failure(exc):
+                        _record_transport_failure(model, is_primary)
                     with self._retry_lock:
                         self.retry_count += 1
                     logger.warning('translate batch failed model=%s attempt=%s error=%s', model, attempt + 1, str(exc)[:300])
                     time.sleep(min(2 * (attempt + 1), 8))
         raise RuntimeError(f'TRANSLATION_FAILED: {last_err}')
 
-    def compress_batch(self, items: list[tuple[int, str, int]], max_attempts: int = 2) -> tuple[dict[int, str], str]:
-        """Compress up to ~10 cues in one model call. Returns ({cue_id: shorter}, model_used)."""
+    def _run_chain(self, messages: list[dict], expected_ids: list[int], max_tokens: int,
+                     timeout: int, primary_retries: int, fallback_retries: int,
+                     label: str) -> tuple[dict[int, str], str]:
+        """Try primary then fallbacks with per-role retry budgets + breaker skip."""
+        last_err: Exception | None = None
+        for idx, model in enumerate(self.models):
+            is_primary = idx == 0
+            if is_primary and primary_unhealthy(model):
+                logger.warning('%s skipping unhealthy primary model=%s', label, model)
+                continue
+            attempts = 1 + max(0, primary_retries if is_primary else fallback_retries)
+            for attempt in range(attempts):
+                try:
+                    t0 = time.monotonic()
+                    _record_call(is_primary)
+                    raw = _post_chat_stream(messages, model, timeout, max_tokens)
+                    mapping = _extract_mapping(raw, expected_ids)
+                    _record_success(model, is_primary)
+                    logger.info('%s ok model=%s cues=%s elapsed=%.1fs',
+                                label, model, len(expected_ids), time.monotonic() - t0)
+                    return mapping, model
+                except Exception as exc:  # noqa: BLE001
+                    last_err = exc
+                    if _is_transport_failure(exc):
+                        _record_transport_failure(model, is_primary)
+                    with self._retry_lock:
+                        self.retry_count += 1
+                    logger.warning('%s failed model=%s attempt=%s error=%s',
+                                   label, model, attempt + 1, str(exc)[:200])
+                    time.sleep(2)
+        raise RuntimeError(f'{label}: {last_err}')
+
+    def compress_batch(self, items: list[tuple[int, str, int]], max_attempts: int = 2,
+                       *, timeout: int | None = None, primary_retries: int | None = None,
+                       fallback_retries: int | None = None) -> tuple[dict[int, str], str]:
+        """Compress up to ~10 cues in one model call. Returns ({cue_id: shorter}, model_used).
+
+        Optional fast-path overrides (Voice QA): short timeout, 0 primary
+        retries so a sick primary costs seconds, not minutes.
+        """
         lines = []
         for cid, text, dur in items:
             budget = max(8, int(dur / 1000 * self._cps_num()))
@@ -324,22 +485,12 @@ class OpenAICompatibleProvider(TranslationProvider):
                 'cues': lines,
             }, ensure_ascii=False)},
         ]
-        last_err: Exception | None = None
-        for model in self.models:
-            for _ in range(max(1, max_attempts)):
-                try:
-                    t0 = time.monotonic()
-                    raw = _post_chat_stream(messages, model, settings.translation_timeout, 2000)
-                    mapping = _extract_mapping(raw, [cid for cid, _, _ in items])
-                    logger.info('compress batch ok model=%s cues=%s elapsed=%.1fs', model, len(items), time.monotonic() - t0)
-                    return mapping, model
-                except Exception as exc:  # noqa: BLE001
-                    last_err = exc
-                    with self._retry_lock:
-                        self.retry_count += 1
-                    logger.warning('compress batch failed model=%s error=%s', model, str(exc)[:200])
-                    time.sleep(2)
-        raise RuntimeError(f'COMPRESS_BATCH_FAILED: {last_err}')
+        return self._run_chain(
+            messages, [cid for cid, _, _ in items], 2000,
+            max(10, int(timeout if timeout is not None else settings.translation_timeout)),
+            max_attempts if primary_retries is None else primary_retries,
+            max_attempts if fallback_retries is None else fallback_retries,
+            'compress batch')
 
     @staticmethod
     def _cps() -> str:
@@ -356,7 +507,9 @@ class OpenAICompatibleProvider(TranslationProvider):
         except (TypeError, ValueError):
             return 20.0
 
-    def compress_text(self, cue_id: int, text_vi: str, duration_ms: int, max_attempts: int = 2) -> str:
+    def compress_text(self, cue_id: int, text_vi: str, duration_ms: int, max_attempts: int = 2,
+                        *, timeout: int | None = None, primary_retries: int | None = None,
+                        fallback_retries: int | None = None) -> str:
         """Rewrite one Vietnamese cue more concisely (CPS). Same model chain."""
         try:
             cps = settings.cps_target
@@ -380,19 +533,13 @@ class OpenAICompatibleProvider(TranslationProvider):
                 'duration_ms': duration_ms,
             }, ensure_ascii=False)},
         ]
-        last_err: Exception | None = None
-        for model in self.models:
-            for _ in range(max(1, max_attempts)):
-                try:
-                    raw = _post_chat_stream(messages, model, settings.translation_timeout, 500)
-                    mapping = _extract_mapping(raw, [cue_id])
-                    return mapping[cue_id]
-                except Exception as exc:  # noqa: BLE001
-                    last_err = exc
-                    with self._retry_lock:
-                        self.retry_count += 1
-                    time.sleep(2)
-        raise RuntimeError(f'COMPRESSION_FAILED cue {cue_id}: {last_err}')
+        mapping, _used = self._run_chain(
+            messages, [cue_id], 500,
+            max(10, int(timeout if timeout is not None else settings.translation_timeout)),
+            max_attempts if primary_retries is None else primary_retries,
+            max_attempts if fallback_retries is None else fallback_retries,
+            f'compress cue {cue_id}')
+        return mapping[cue_id]
 
     def translate_batch(self, cues: list[TransCue], context: TransContext) -> dict[int, str]:
         mapping, _ = self.translate_batch_with_model(cues, context)
