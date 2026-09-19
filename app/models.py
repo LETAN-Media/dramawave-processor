@@ -20,7 +20,6 @@ class Job(Base):
     bvid: Mapped[str | None] = mapped_column(String(32), index=True)
     cid: Mapped[str | None] = mapped_column(String(32), index=True)
     title: Mapped[str | None] = mapped_column(Text)
-    episode_metadata: Mapped[str | None] = mapped_column(Text)
     author: Mapped[str | None] = mapped_column(Text)
     cover_url: Mapped[str | None] = mapped_column(Text)
     duration_seconds: Mapped[float | None] = mapped_column(Float)
@@ -144,7 +143,6 @@ class Series(Base):
     provider: Mapped[str] = mapped_column(String(32), index=True)
     provider_series_id: Mapped[str] = mapped_column(String(128), index=True)
     title: Mapped[str | None] = mapped_column(Text)
-    episode_metadata: Mapped[str | None] = mapped_column(Text)
     cover_url: Mapped[str | None] = mapped_column(Text)
     episode_count: Mapped[int | None] = mapped_column(Integer)
     source_url: Mapped[str | None] = mapped_column(Text)
@@ -267,7 +265,6 @@ class YouTubePublication(Base):
     youtube_video_id: Mapped[str | None] = mapped_column(String(32), index=True)
     youtube_url: Mapped[str | None] = mapped_column(Text)
     title: Mapped[str | None] = mapped_column(Text)
-    episode_metadata: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
     tags: Mapped[str | None] = mapped_column(Text)  # JSON list[str]
     privacy: Mapped[str | None] = mapped_column(String(16), default='public')

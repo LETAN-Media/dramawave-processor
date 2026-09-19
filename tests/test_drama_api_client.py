@@ -13,11 +13,11 @@ def _resp(payload):
 
 
 def test_client_sends_bearer_token(monkeypatch):
-    import app.clients.dramawave_api as client
+    import app.clients.drama_source_api as client
     from app.config import settings
 
     seen = {}
-    monkeypatch.setattr(settings, 'dramawave_api_token', 'tok123')
+    monkeypatch.setattr(settings, 'drama_source_api_token', 'tok123')
 
     def fake_urlopen(req, timeout=None):
         seen['auth'] = req.get_header('Authorization')
@@ -29,11 +29,11 @@ def test_client_sends_bearer_token(monkeypatch):
 
 
 def test_client_no_token_no_header(monkeypatch):
-    import app.clients.dramawave_api as client
+    import app.clients.drama_source_api as client
     from app.config import settings
 
     seen = {}
-    monkeypatch.setattr(settings, 'dramawave_api_token', '')
+    monkeypatch.setattr(settings, 'drama_source_api_token', '')
 
     def fake_urlopen(req, timeout=None):
         seen['auth'] = req.get_header('Authorization')
@@ -46,7 +46,7 @@ def test_client_no_token_no_header(monkeypatch):
 
 def test_cold_start_retry(monkeypatch):
     """Two timeouts (cold start) then success: bounded retries recover."""
-    import app.clients.dramawave_api as client
+    import app.clients.drama_source_api as client
 
     calls = {'n': 0}
 
@@ -57,14 +57,14 @@ def test_cold_start_retry(monkeypatch):
         return _resp({'ok': True})
 
     monkeypatch.setattr(client.urllib.request, 'urlopen', fake_urlopen)
-    monkeypatch.setattr('app.clients.dramawave_api.time.sleep', lambda s: None)
+    monkeypatch.setattr('app.clients.drama_source_api.time.sleep', lambda s: None)
     out = client._request('GET', '/health')
     assert out == {'ok': True} and calls['n'] == 3
 
 
 def test_unauthorized_mapping(monkeypatch):
-    import app.clients.dramawave_api as client
-    from app.clients.dramawave_api import DramaApiError
+    import app.clients.drama_source_api as client
+    from app.clients.drama_source_api import DramaApiError
 
     def fake_urlopen(req, timeout=None):
         raise urllib.error.HTTPError(req.full_url, 401, 'unauth', {}, None)
@@ -78,8 +78,8 @@ def test_unauthorized_mapping(monkeypatch):
 
 
 def test_retry_after_respected(monkeypatch):
-    import app.clients.dramawave_api as client
-    from app.clients.dramawave_api import DramaApiError
+    import app.clients.drama_source_api as client
+    from app.clients.drama_source_api import DramaApiError
 
     sleeps = []
 
@@ -87,8 +87,8 @@ def test_retry_after_respected(monkeypatch):
         raise urllib.error.HTTPError(req.full_url, 429, 'rl', {'Retry-After': '1'}, None)
 
     monkeypatch.setattr(client.urllib.request, 'urlopen', fake_urlopen)
-    monkeypatch.setattr('app.clients.dramawave_api.time.sleep', lambda s: sleeps.append(s))
-    monkeypatch.setattr('app.clients.dramawave_api.random.uniform', lambda a, b: 0)
+    monkeypatch.setattr('app.clients.drama_source_api.time.sleep', lambda s: sleeps.append(s))
+    monkeypatch.setattr('app.clients.drama_source_api.random.uniform', lambda a, b: 0)
     try:
         client._request('GET', '/v1/search', params={'q': 'x'})
         raise AssertionError('should raise')

@@ -22,6 +22,7 @@ def client(tmp_path, monkeypatch):
     Session = _test_session(tmp_path, 'shared.db')
     monkeypatch.setattr('app.web.routes.SessionLocal', Session)
     monkeypatch.setattr('app.services.episodes.SessionLocal', Session)
+    monkeypatch.setattr('app.api.routes.SessionLocal', Session)
     from app.config import settings
     monkeypatch.setattr(settings, 'dashboard_username', '')
     monkeypatch.setattr(settings, 'dashboard_password', '')
@@ -72,7 +73,8 @@ def test_inline_init_runs_after_app_js(client):
     r = client.get('/series/PID1')
     assert r.status_code == 200
     html = r.text
-    js_tag = html.find('<script src="/static/app.js"')
+    print('HTML CONTENT:', html[:500])
+    js_tag = html.find('<script src="/static/app.js')
     assert js_tag != -1
     js_close = html.find('>', js_tag)
     assert 'defer' not in html[js_tag:js_close], 'app.js must not be deferred'
@@ -155,7 +157,7 @@ def test_web_search_empty_and_error(client, monkeypatch):
     monkeypatch.setattr('app.web.routes.api.search', lambda q, limit=20: [])
     assert client.get('/web/api/search?q=zzz').json() == {'items': []}
 
-    from app.clients.dramawave_api import DramaApiError
+    from app.clients.drama_source_api import DramaApiError
 
     def boom(q, limit=20):
         raise DramaApiError('DRAMA_API_TIMEOUT', 'slow')
@@ -167,12 +169,12 @@ def test_web_search_empty_and_error(client, monkeypatch):
 
 def test_series_detail_locked_flags(client, monkeypatch):
     monkeypatch.setattr('app.web.routes.api.get_series',
-                        lambda pid: {'series_id': pid, 'title': 'T', 'description': '',
-                                     'cover_url': None, 'episode_count': 5, 'metadata': {}})
+                        lambda pid: {'canonical_series_id': pid, 'title': 'T', 'description': '',
+                                     'cover_url': None, 'episode_count': 5, 'sources': [{'provider': 'dramawave', 'provider_series_id': pid}]})
     monkeypatch.setattr('app.web.routes.api.list_episodes',
-                        lambda pid: {'series_id': pid, 'total': 5, 'episodes': [
-                            {'episode_id': f'E{i}', 'episode_number': i, 'title': f'Ep {i}',
-                             'duration': 60.0, 'locked': i >= 4} for i in range(1, 6)]})
+                        lambda pid: {'canonical_series_id': pid, 'total': 5, 'episodes': [
+                            {'episode_number': i, 'title': f'Ep {i}',
+                             'duration': 60.0, 'status': 'locked' if i >= 4 else 'free', 'sources': [{'provider': 'dramawave', 'provider_episode_id': f'E{i}', 'locked': i >= 4, 'status': 'locked' if i >= 4 else 'free'}]} for i in range(1, 6)]})
     r = client.get('/web/api/series/PID1')
     assert r.status_code == 200
     data = r.json()
@@ -183,12 +185,12 @@ def test_series_detail_locked_flags(client, monkeypatch):
 
 def test_process_rejects_locked_only(client, monkeypatch):
     monkeypatch.setattr('app.web.routes.api.get_series',
-                        lambda pid: {'series_id': pid, 'title': 'T', 'description': '',
-                                     'cover_url': None, 'episode_count': 5, 'metadata': {}})
+                        lambda pid: {'canonical_series_id': pid, 'title': 'T', 'description': '',
+                                     'cover_url': None, 'episode_count': 5, 'sources': [{'provider': 'dramawave', 'provider_series_id': pid}]})
     monkeypatch.setattr('app.web.routes.api.list_episodes',
-                        lambda pid: {'series_id': pid, 'total': 5, 'episodes': [
-                            {'episode_id': f'E{i}', 'episode_number': i, 'title': f'Ep {i}',
-                             'duration': 60.0, 'locked': i >= 4} for i in range(1, 6)]})
+                        lambda pid: {'canonical_series_id': pid, 'total': 5, 'episodes': [
+                            {'episode_number': i, 'title': f'Ep {i}',
+                             'duration': 60.0, 'status': 'locked' if i >= 4 else 'free', 'sources': [{'provider': 'dramawave', 'provider_episode_id': f'E{i}', 'locked': i >= 4, 'status': 'locked' if i >= 4 else 'free'}]} for i in range(1, 6)]})
     r = client.post('/web/api/series/PID1/process', json={
         'from_episode': 4, 'to_episode': 5, 'quality': '1080p',
         'voice': 'vi-VN-HoaiMyNeural', 'translation_style': 'AUTO'})
@@ -197,12 +199,12 @@ def test_process_rejects_locked_only(client, monkeypatch):
 
 def test_process_validation(client, monkeypatch):
     monkeypatch.setattr('app.web.routes.api.get_series',
-                        lambda pid: {'series_id': pid, 'title': 'T', 'description': '',
-                                     'cover_url': None, 'episode_count': 5, 'metadata': {}})
+                        lambda pid: {'canonical_series_id': pid, 'title': 'T', 'description': '',
+                                     'cover_url': None, 'episode_count': 5, 'sources': [{'provider': 'dramawave', 'provider_series_id': pid}]})
     monkeypatch.setattr('app.web.routes.api.list_episodes',
-                        lambda pid: {'series_id': pid, 'total': 5, 'episodes': [
-                            {'episode_id': f'E{i}', 'episode_number': i, 'title': f'Ep {i}',
-                             'duration': 60.0, 'locked': False} for i in range(1, 6)]})
+                        lambda pid: {'canonical_series_id': pid, 'total': 5, 'episodes': [
+                            {'episode_number': i, 'title': f'Ep {i}',
+                             'duration': 60.0, 'status': 'free', 'sources': [{'provider': 'dramawave', 'provider_episode_id': f'E{i}', 'locked': False, 'status': 'free'}]} for i in range(1, 6)]})
     base = {'from_episode': 1, 'to_episode': 2, 'quality': '1080p',
             'voice': 'vi-VN-HoaiMyNeural', 'translation_style': 'AUTO'}
     bad_q = dict(base, quality='4k')
@@ -215,12 +217,12 @@ def test_process_validation(client, monkeypatch):
 
 def test_process_enqueues_and_style_saved(client, monkeypatch):
     monkeypatch.setattr('app.web.routes.api.get_series',
-                        lambda pid: {'series_id': pid, 'title': 'T', 'description': '',
-                                     'cover_url': None, 'episode_count': 5, 'metadata': {}})
+                        lambda pid: {'canonical_series_id': pid, 'title': 'T', 'description': '',
+                                     'cover_url': None, 'episode_count': 5, 'sources': [{'provider': 'dramawave', 'provider_series_id': pid}]})
     monkeypatch.setattr('app.web.routes.api.list_episodes',
-                        lambda pid: {'series_id': pid, 'total': 5, 'episodes': [
-                            {'episode_id': f'E{i}', 'episode_number': i, 'title': f'Ep {i}',
-                             'duration': 60.0, 'locked': False} for i in range(1, 6)]})
+                        lambda pid: {'canonical_series_id': pid, 'total': 5, 'episodes': [
+                            {'episode_number': i, 'title': f'Ep {i}',
+                             'duration': 60.0, 'status': 'free', 'sources': [{'provider': 'dramawave', 'provider_episode_id': f'E{i}', 'locked': False, 'status': 'free'}]} for i in range(1, 6)]})
     r = client.post('/web/api/series/PID1/process', json={
         'from_episode': 1, 'to_episode': 2, 'quality': '720p',
         'voice': 'vi-VN-NamMinhNeural', 'translation_style': 'XIANXIA'})
@@ -337,6 +339,7 @@ def test_alias_process_route_with_style(tmp_path, monkeypatch):
 
     Session = _test_session(tmp_path, 'alias.db')
     monkeypatch.setattr('app.services.episodes.SessionLocal', Session)
+    monkeypatch.setattr('app.api.routes.SessionLocal', Session)
     monkeypatch.setattr('app.api.routes.SessionLocal', Session)
     monkeypatch.setattr(settings, 'api_key', None)
     series = _seed_series(monkeypatch, Session)

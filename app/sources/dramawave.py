@@ -80,6 +80,8 @@ class DramaWaveSource(VideoSourceProvider):
             raise SourceError(exc.code, exc.message) from exc
 
     def resolve_episode(self, episode: EpisodeInfo, quality: str | None = None) -> EpisodePlayback:
+        if episode.locked:
+            raise SourceError('LOCKED', 'Episode is locked')
         try:
             pb = api_resolve_playback(series_id=episode.source_url, episode_number=episode.episode_number, quality=quality or 'best')
             return EpisodePlayback(

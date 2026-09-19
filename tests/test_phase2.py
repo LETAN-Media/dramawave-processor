@@ -331,7 +331,12 @@ def test_cps_calculation():
 
 
 def test_long_translation_compression(tmp_path, monkeypatch):
+    import app.models
+    from app.db import Base, engine
+    Base.metadata.create_all(engine)
+    
     from app.services import phase2 as p2
+
 
     cues = [{'id': 1, 'start_ms': 0, 'end_ms': 1000, 'text': '你好世界这是一个很长的句子'}]
     mapping = {1: 'Đây là một câu dịch tiếng Việt cực kỳ dài dòng không thể nào đọc kịp trong một giây'}
